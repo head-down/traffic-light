@@ -2,18 +2,29 @@
 HTTP 服务 — stdlib http.server 运行于 QThread，零额外依赖
 """
 import json
+import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from PyQt5.QtCore import QThread, pyqtSignal
 
 
+class _ExclusiveHTTPServer(HTTPServer):
+    """禁用 SO_REUSEADDR，确保端口独占绑定，冲突时抛 OSError"""
+    allow_reuse_address = False
+
+    def server_bind(self):
+        # Windows: 额外设置 SO_EXCLUSIVEADDRUSE 防止端口被复用
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class _RequestHandler(BaseHTTPRequestHandler):
     """HTTP 请求处理器（在 QThread 中运行）"""
-    # 类变量，由 HTTPServerThread 注入
     state_manager = None
     server_name = "agent"
 
     def log_message(self, format, *args):
-        pass  # 静默日志
+        pass
 
     def _json_response(self, code, data):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -58,29 +69,45 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
 
 class HTTPServerThread(QThread):
-    """在独立线程中运行 HTTP 服务器"""
+    """在独立线程中运行 HTTP 服务器，端口冲突时自动重试下一个"""
 
-    state_received = pyqtSignal(str)  # 收到合法状态更新
+    port_bound = pyqtSignal(int)
 
-    def __init__(self, port, state_manager, name="agent"):
+    def __init__(self, start_port, state_manager, name="agent", max_retries=10):
         super().__init__()
-        self._port = port
+        self._start_port = start_port
         self._state_manager = state_manager
         self._name = name
+        self._max_retries = max_retries
         self._server = None
         self._running = True
+        self._actual_port = 0
+
+    @property
+    def port(self):
+        return self._actual_port
 
     def run(self):
         _RequestHandler.state_manager = self._state_manager
         _RequestHandler.server_name = self._name
 
-        try:
-            self._server = HTTPServer(("127.0.0.1", self._port), _RequestHandler)
-            self._server.timeout = 1  # 1 秒超时，便于检查 _running
-            while self._running:
-                self._server.handle_request()
-        except Exception:
-            pass
+        # 尝试绑定端口，冲突时自动递增（原子操作，无竞态）
+        for offset in range(self._max_retries):
+            port = self._start_port + offset
+            try:
+                self._server = _ExclusiveHTTPServer(("127.0.0.1", port), _RequestHandler)
+                self._actual_port = port
+                self.port_bound.emit(port)
+                break
+            except OSError:
+                continue
+        else:
+            print(f"[traffic-light] 无法绑定端口 {self._start_port}-{self._start_port + self._max_retries - 1}")
+            return
+
+        self._server.timeout = 1
+        while self._running:
+            self._server.handle_request()
 
     def stop(self):
         self._running = False

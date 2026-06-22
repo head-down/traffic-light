@@ -16,34 +16,49 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="/d/software/python/python"
+PORT_FILE="/tmp/traffic-light-port-$$"
+
+# ---- 清理旧端口文件 ----
+rm -f "$PORT_FILE"
 
 # ---- 启动红绿灯实例 ----
 _traffic_light_start() {
     local name="${1:-agent}"
 
-    # 找可用端口
-    local port=9527
+    # 启动红绿灯（后台），端口由进程内部自动检测
+    "$PYTHON" "$SCRIPT_DIR/traffic_light.py" --name "$name" 2>/dev/null &
+    local pid=$!
+
+    # 等待 2 秒让端口绑定完成，然后探测
+    sleep 2
+
+    # 扫描端口找到这个实例
+    local found_port=""
     for ((i=0; i<10; i++)); do
-        if ! (echo >/dev/tcp/127.0.0.1/$((port+i))) 2>/dev/null; then
-            port=$((port+i))
+        local p=$((9527 + i))
+        local resp
+        resp=$(curl -s "http://127.0.0.1:$p/state" 2>/dev/null)
+        if echo "$resp" | grep -q "\"name\":\"$name\""; then
+            found_port=$p
             break
         fi
     done
 
-    # 启动红绿灯（后台）
-    "$PYTHON" "$SCRIPT_DIR/traffic_light.py" --name "$name" --port "$port" &
-    local pid=$!
-    sleep 2
+    if [ -z "$found_port" ]; then
+        echo "[traffic-light] 启动失败，无法找到 $name 实例"
+        kill $pid 2>/dev/null
+        return 1
+    fi
 
     # 导出环境变量
-    export TRAFFIC_LIGHT_PORT=$port
+    export TRAFFIC_LIGHT_PORT=$found_port
     export TRAFFIC_LIGHT_NAME=$name
     export TRAFFIC_LIGHT_PID=$pid
 
     # 注册退出时自动清理
     trap 'light idle; sleep 6; kill $TRAFFIC_LIGHT_PID 2>/dev/null' EXIT
 
-    echo "[traffic-light] $name 已绑定, HTTP → http://127.0.0.1:$port"
+    echo "[traffic-light] $name 已绑定, HTTP → http://127.0.0.1:$found_port"
 }
 
 # ---- 更新状态 ----
