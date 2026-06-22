@@ -1,101 +1,66 @@
-# Traffic Light
+# 红绿灯 (Traffic Light)
 
-Windows 桌面红绿灯状态指示器 — PyQt5 透明置顶悬浮窗，通过 HTTP 接口实时展示 CLI/Agent 运行状态。
+[![GitHub stars](https://img.shields.io/github/stars/head-down/traffic-light?style=flat-square&color=gold)](https://github.com/head-down/traffic-light/stargazers)
+[![GitHub license](https://img.shields.io/github/license/head-down/traffic-light?style=flat-square&color=blue)](https://github.com/head-down/traffic-light/blob/master/LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?style=flat-square&logo=windows)](https://github.com/head-down/traffic-light)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square&logo=python)](https://www.python.org/)
+[![Status](https://img.shields.io/badge/status-working-brightgreen?style=flat-square)](https://github.com/head-down/traffic-light)
+
+PyQt5 透明置顶悬浮窗，通过 HTTP 接口实时展示 CLI / Agent 运行状态。余光感知，无需切换窗口。
 
 ```
 ┌──────────────┐
-│  ●   ●   ●  │
-│ 🔴  🟡  🟢  │
-│   agent      │
+│  ●   ●   ●  │      红灯：失败（闪烁）
+│ 🔴  🟡  🟢  │      黄灯：运行中（呼吸）
+│   agent      │      绿灯：成功（常亮）
 └──────────────┘
 ```
 
-## 安装
+## 星标趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=head-down/traffic-light&type=Date)](https://star-history.com/#head-down/traffic-light&Date)
+
+## 原理
+
+- PyQt5 绘制无边框透明窗口，通过 `SetWindowPos(HWND_TOPMOST)` + 2 秒循环抬升保持置顶
+- QPainter 抗锯齿圆形 + QRadialGradient 径向渐变模拟外发光效果
+- 四态状态机（idle → running → success/failure → idle），黄灯呼吸动画、红灯闪烁
+- stdlib `http.server` 运行于 QThread，HTTP API 零额外依赖，支持多实例端口自动递增
+
+## 运行
+
+```bash
+cd traffic-light
+python traffic_light.py --name build
+```
+
+更新状态：
+
+```bash
+curl -X POST http://127.0.0.1:9527/state -d '{"state":"running"}'
+curl -X POST http://127.0.0.1:9527/state -d '{"state":"success"}'
+curl -X POST http://127.0.0.1:9527/state -d '{"state":"failure"}'
+```
+
+## 依赖
 
 ```bash
 pip install PyQt5
-git clone https://github.com/head-down/traffic-light.git
-cd traffic-light
 ```
 
-## 使用
+## 配置
 
-### 启动红绿灯
+通过命令行参数控制：
 
-```bash
-python traffic-light.py --name build
-# [traffic-light] build 已启动, HTTP → http://127.0.0.1:9527
-```
+| 配置项 | 说明 |
+|--------|------|
+| `--name` | 实例名称，显示在灯下方（默认 `agent`） |
+| `--port` | HTTP 端口，`0` = 从 9527 开始自动检测 |
 
-### 更新状态
+## 平台
 
-```bash
-# 运行中
-curl -X POST http://127.0.0.1:9527/state -d '{"state":"running"}'
+仅限 Windows（依赖 `SetWindowPos`、`ctypes.windll` 等 Windows 专属 API）。
 
-# 成功
-curl -X POST http://127.0.0.1:9527/state -d '{"state":"success"}'
+## 许可证
 
-# 失败
-curl -X POST http://127.0.0.1:9527/state -d '{"state":"failure"}'
-
-# 重置
-curl -X POST http://127.0.0.1:9527/state -d '{"state":"idle"}'
-```
-
-### 查询状态
-
-```bash
-curl http://127.0.0.1:9527/state
-# {"state":"idle","name":"build"}
-```
-
-### 多终端支持
-
-每个终端启动独立红绿灯实例，端口自动递增：
-
-```bash
-# 终端1
-python traffic-light.py --name build
-# → http://127.0.0.1:9527
-
-# 终端2
-python traffic-light.py --name test
-# → http://127.0.0.1:9528
-
-# 终端3
-python traffic-light.py --name deploy
-# → http://127.0.0.1:9529
-```
-
-## API
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| `POST` | `/state` | 更新状态 `{"state":"running\|success\|failure\|idle"}` |
-| `GET` | `/state` | 查询当前状态 |
-| `GET` | `/health` | 健康检查 |
-
-## 视觉效果
-
-- **黄灯** — 运行中，呼吸动画（大小 14→22px）
-- **绿灯** — 成功，5 秒后自动回 idle
-- **红灯** — 失败，闪烁动画，5 秒后自动回 idle
-- **所有不亮** — idle（空闲）
-
-## 命令行参数
-
-```
---name NAME      实例名称 (默认: agent)
---port PORT      HTTP 端口 (默认: 0=自动检测)
-```
-
-## 技术栈
-
-- PyQt5 — 透明窗口 + 抗锯齿绘制 + 动画
-- stdlib http.server — HTTP API（零额外依赖）
-- SetWindowPos(HWND_TOPMOST) — Windows 强制置顶
-
-## 许可
-
-MIT
+MIT License - 灯是自己的，Bug 是 AI 的。
