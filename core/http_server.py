@@ -37,7 +37,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/state":
             state = self.state_manager.state if self.state_manager else "idle"
-            self._json_response(200, {"state": state, "name": self.server_name})
+            session_count = self.state_manager.session_count if self.state_manager else 0
+            self._json_response(200, {
+                "state": state,
+                "name": self.server_name,
+                "sessions": session_count,
+            })
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -49,14 +54,21 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length)) if length > 0 else {}
                 new_state = body.get("state", "").strip().lower()
+                session_id = body.get("session_id", "default")
             except (json.JSONDecodeError, ValueError):
                 self._json_response(400, {"error": "invalid json"})
                 return
 
             if self.state_manager:
-                ok = self.state_manager.update_state(new_state)
+                ok = self.state_manager.update_session(session_id, new_state)
                 if ok:
-                    self._json_response(200, {"status": "ok", "state": new_state})
+                    self._json_response(200, {
+                        "status": "ok",
+                        "state": new_state,
+                        "session_id": session_id,
+                        "aggregated": self.state_manager.state,
+                        "sessions": self.state_manager.session_count,
+                    })
                 else:
                     self._json_response(400, {
                         "error": "invalid state",
@@ -64,6 +76,24 @@ class _RequestHandler(BaseHTTPRequestHandler):
                     })
             else:
                 self._json_response(500, {"error": "state manager not available"})
+        elif self.path == "/session/end":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length)) if length > 0 else {}
+                session_id = body.get("session_id", "")
+            except (json.JSONDecodeError, ValueError):
+                self._json_response(400, {"error": "invalid json"})
+                return
+
+            if self.state_manager and session_id:
+                self.state_manager.remove_session(session_id)
+                self._json_response(200, {
+                    "status": "ok",
+                    "aggregated": self.state_manager.state,
+                    "sessions": self.state_manager.session_count,
+                })
+            else:
+                self._json_response(400, {"error": "session_id required"})
         else:
             self._json_response(404, {"error": "not found"})
 

@@ -1,5 +1,6 @@
 {
-  "_comment": "将此文件复制到项目根目录 .codebuddy/settings.local.json 或全局 ~/.codebuddy/settings.json",
+  "_comment": "复制到项目根目录 .codebuddy/settings.local.json 或全局 ~/.codebuddy/settings.json",
+  "_note": "请将 $CODEBUDDY_PROJECT_DIR 替换为实际路径，或把 hooks/traffic-light.sh 复制到项目 .codebuddy/hooks/ 下",
   "hooks": {
     "SessionStart": [
       {
@@ -37,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh idle"
+            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh end"
           }
         ]
       }
