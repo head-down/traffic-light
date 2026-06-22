@@ -7,3 +7,4 @@ build/
 *.spec
 _*.txt
 test_*.txt
+.pytest_cache/
