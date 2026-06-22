@@ -1,0 +1,46 @@
+{
+  "_comment": "将此文件复制到项目根目录 .codebuddy/settings.local.json 或全局 ~/.codebuddy/settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh idle"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh running"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh success"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh idle"
+          }
+        ]
+      }
+    ]
+  }
+}

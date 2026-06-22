@@ -55,8 +55,11 @@ _traffic_light_start() {
     export TRAFFIC_LIGHT_NAME=$name
     export TRAFFIC_LIGHT_PID=$pid
 
+    # 写入端口文件（供 CodeBuddy hook 脚本读取）
+    echo "$found_port" > "/tmp/traffic-light-port-$name"
+
     # 注册退出时自动清理
-    trap 'light idle; sleep 6; kill $TRAFFIC_LIGHT_PID 2>/dev/null' EXIT
+    trap 'light idle; sleep 6; kill $TRAFFIC_LIGHT_PID 2>/dev/null; rm -f /tmp/traffic-light-port-$TRAFFIC_LIGHT_NAME' EXIT
 
     echo "[traffic-light] $name 已绑定, HTTP → http://127.0.0.1:$found_port"
 }
