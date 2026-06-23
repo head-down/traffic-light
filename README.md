@@ -34,22 +34,32 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 - QPainter 抗锯齿圆形 + QRadialGradient 三层霓虹发光（内层强光 / 中层光晕 / 外层扩散）
 - 玻璃拟态（Glassmorphism）面板：半透明暗蓝背景 + 多层霓虹边框发光
 - 6 态状态机（idle / thinking / running / waiting / success / failure），QPropertyAnimation 驱动动画
-- **文件系统轮询**：CodeBuddy hook 用 bash 内置 `echo >` 写 `.traffic-light-states/current.state`，守护进程 QTimer 300ms 轮询，hook 延迟 ~115ms
+- **文件系统轮询**：CodeBuddy hook 写 `<项目名>.state` 到 `.traffic-light-states/`，守护进程 300ms 轮询，hook 延迟 ~115ms
+- **项目隔离**：`--project <name>` 绑定到指定项目，不同项目的灯完全解耦
+- **单实例锁**：Windows Mutex（`TrafficLight_<项目名>`），同一项目只允许一个守护进程
 - 可选 HTTP server（`--port N`）兼容旧 hook 脚本
 
 ## CodeBuddy 集成
 
-守护进程自动聚合状态，所有 hook 共用 `current.state`（单文件方案）。
+状态文件按项目名隔离，`--project <name>` 绑定到指定项目：
 
 ```bash
-# 1. 启动守护进程（只需一次）
-python traffic_light.py
+# 1. 启动守护进程（每项目一次）
+python traffic_light.py --project mine          # mine 项目的灯
+python traffic_light.py --project jw-zhyg-api   # jw-zhyg-api 项目的灯
 
-# 2. 复制 hook 配置到 CodeBuddy 项目
-#    配置已内置在 .codebuddy/settings.local.json
+# 2. 或通过 bind.sh 启动
+source bind.sh --project mine
+source bind.sh --project jw-zhyg-api
 ```
 
-之后打开任意 CodeBuddy 终端，agent 自动更新红绿灯：
+不指定 `--project` 时聚合所有项目状态（向后兼容）。
+
+### 为新项目配置
+
+在项目的 `.codebuddy/settings.local.json` 中添加 hook 配置，hook 自动从 `CODEBUDDY_PROJECT_DIR` 提取项目名写对应 `.state` 文件。
+
+之后打开该项目的 CodeBuddy 终端，agent 自动更新红绿灯：
 
 | Hook 事件 | 灯状态 | 动画 | 说明 |
 |-----------|--------|------|------|
@@ -64,7 +74,18 @@ python traffic_light.py
 
 **TTL 机制：** thinking 180s / running 90s / waiting 600s / success 8s / failure 30s，超时自动回 idle。
 
-> **已知限制：** CodeBuddy hook 环境不传递 `CODEBUDDY_SESSION_ID`（`$$` 每次不同、`$PPID=1`），无法区分同一项目的多个终端会话，多个终端会"串台"。单终端使用无影响。
+### 单实例锁
+
+同一项目只允许一个守护进程，第二次启动直接退出（Mutex `TrafficLight_<项目名>`）。进程退出/kill 时 Mutex 自动释放。
+
+```bash
+$ python traffic_light.py --project mine
+[SignalLight] mine 的守护进程已在运行    # 重复启动被拒绝
+```
+
+**多窗口行为：** 同一项目的多个 CodeBuddy 窗口共用一个守护进程（一盏灯），状态文件以 last-write-wins 聚合；不同项目的守护进程完全独立，互不干扰。
+
+> **已知限制：** CodeBuddy hook 环境不传递 `CODEBUDDY_SESSION_ID`（`$$` 每次不同、`$PPID=1`），同一项目的多个终端窗口共用同一个 `<项目名>.state` 文件，以 **last-write-wins** 聚合——灯反映最近触发 hook 的窗口状态。不同项目完全独立，互不影响。
 
 ## 运行
 
@@ -74,8 +95,12 @@ cd traffic-light
 # 守护进程模式（默认文件轮询，推荐）
 python traffic_light.py
 
+# 绑定到指定项目（推荐）
+python traffic_light.py --project mine
+python traffic_light.py --project jw-zhyg-api
+
 # 或通过 bind.sh 启动
-source bind.sh
+source bind.sh --project mine
 
 # 启用 HTTP server（兼容旧 hook 脚本）
 python traffic_light.py --port 9527
@@ -85,12 +110,12 @@ python traffic_light.py --port 9527
 
 ```bash
 # 写状态文件（第一行状态，第二行项目路径）
-printf "thinking\n/d/DevelopTools/mine\n" > .traffic-light-states/current.state
-printf "running\n/d/DevelopTools/mine\n" > .traffic-light-states/current.state
-printf "success\n/d/DevelopTools/mine\n" > .traffic-light-states/current.state
+printf "thinking\n/d/DevelopTools/mine\n" > .traffic-light-states/mine.state
+printf "running\n/d/DevelopTools/mine\n" > .traffic-light-states/mine.state
+printf "success\n/d/DevelopTools/mine\n" > .traffic-light-states/mine.state
 
 # 清除（回 idle）
-rm .traffic-light-states/current.state
+rm .traffic-light-states/mine.state
 ```
 
 HTTP API（兼容模式）：
