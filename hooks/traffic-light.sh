@@ -16,6 +16,17 @@
 
 state="${1:-running}"
 
+# PostToolUse 发送 JSON 到 stdin，检测工具执行是否失败
+if [ ! -t 0 ] 2>/dev/null; then
+    _hook_stdin=$(cat 2>/dev/null)
+    if [ -n "$_hook_stdin" ]; then
+        _check_script="d:/DevelopTools/mine/traffic-light/hooks/check_failure.py"
+        if echo "$_hook_stdin" | /d/software/python/python "$_check_script" 2>/dev/null; then
+            state="failure"
+        fi
+    fi
+fi
+
 # 项目路径（CODEBUDDY_PROJECT_DIR 在 hook 环境可用）
 project_dir="${CODEBUDDY_PROJECT_DIR:-}"
 # 提取项目目录名，作为命名空间（缺少时用 current 兼容旧方案）
