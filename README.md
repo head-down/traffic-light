@@ -46,11 +46,9 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 ```bash
 # 1. 启动守护进程（每项目一次）
 python traffic_light.py --project mine          # mine 项目的灯
-python traffic_light.py --project jw-zhyg-api   # jw-zhyg-api 项目的灯
 
 # 2. 或通过 bind.sh 启动
 source bind.sh --project mine
-source bind.sh --project jw-zhyg-api
 ```
 
 不指定 `--project` 时聚合所有项目状态（向后兼容）。
@@ -97,7 +95,6 @@ python traffic_light.py
 
 # 绑定到指定项目（推荐）
 python traffic_light.py --project mine
-python traffic_light.py --project jw-zhyg-api
 
 # 或通过 bind.sh 启动
 source bind.sh --project mine
