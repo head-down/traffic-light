@@ -68,15 +68,12 @@ class StateManager(QObject):
     def _poll_from_dir(self):
         """扫描状态目录，按优先级聚合，清理过期文件"""
         if not os.path.isdir(_STATE_DIR):
-            if self._project_dir:
-                self._project_dir = ""
-                self.project_dir_changed.emit("")
             return
 
         now = time.time()
         sessions = {}
         stale_files = []
-        project_dir = ""
+        project_dir = None  # None 表示本轮没有获取到新值
 
         try:
             for fname in os.listdir(_STATE_DIR):
@@ -94,7 +91,7 @@ class StateManager(QObject):
                     # 第二行：项目路径（可选，向后兼容）
                     if len(lines) >= 2:
                         pdir = lines[1].strip()
-                        if pdir and not project_dir:
+                        if pdir and project_dir is None:
                             project_dir = pdir
                     # 按状态类型查 TTL
                     ttl = STATE_TTL_SECONDS.get(state, 30)
@@ -118,10 +115,11 @@ class StateManager(QObject):
         self._sessions = sessions
         self._recompute()
 
-        # 项目路径变化通知
-        if project_dir != self._project_dir:
-            self._project_dir = project_dir
-            self.project_dir_changed.emit(project_dir)
+        # 项目路径变化通知：只更新非空值，保持常驻显示
+        if project_dir is not None:
+            if project_dir != self._project_dir:
+                self._project_dir = project_dir
+                self.project_dir_changed.emit(project_dir)
 
     # ---- 属性 ----
     @property

@@ -45,8 +45,8 @@ DIM_ALPHA = 30            # 熄灭灯透明度（参考 --off-opacity 0.12，但
 GLOW_ALPHA_INNER = 130    # 内层发光 alpha
 GLOW_ALPHA_MID = 70       # 中层发光 alpha
 GLOW_ALPHA_OUTER = 30     # 外层发光 alpha
-LIGHT_RADIUS = 18         # 灯半径
-SPACING = 50              # 灯心距
+LIGHT_RADIUS = 20         # 灯半径
+SPACING = 55              # 灯心距
 
 # 黄灯呼吸
 BREATHE_MIN = 14
@@ -332,54 +332,52 @@ class LightPanel(QWidget):
         w = self.width()
         h = self.height()
 
-        centers = [
-            w // 2 - SPACING,
-            w // 2,
-            w // 2 + SPACING,
-        ]
-        light_types = ["red", "yellow", "green"]
-        y_center = h // 2 - 12
-
-        for i, (cx, lt) in enumerate(zip(centers, light_types)):
-            self._draw_light_complete(painter, cx, y_center, lt, i)
-
-        # 状态标签
-        label = self._state_label()
-        if label:
-            painter.setPen(QColor(200, 210, 230, 180))
-            font = QFont(self.parent().font()) if self.parent() else QFont()
-            font.setPointSize(8)
-            font.setLetterSpacing(QFont.PercentageSpacing, 105)
-            painter.setFont(font)
-            painter.drawText(0, h - 30, w, 16, Qt.AlignHCenter, label)
-
-        # 项目路径
+        # 项目路径（顶部常驻显示）
         if self._project_name:
-            # 默认显示项目目录名，清晰可识别；太长时截断保留尾部
             display_name = self._shorten_path(self._project_name, w - 24)
             pfont = QFont(self.parent().font()) if self.parent() else QFont()
             pfont.setPointSize(8)
             pfont.setBold(True)
             painter.setFont(pfont)
 
-            # 计算文本宽度，准备背景药丸
             fm = painter.fontMetrics()
             text_w = fm.boundingRect(display_name).width()
             pill_x = (w - text_w) // 2 - 8
-            pill_y = h - 18
+            pill_y = 5
             pill_w = text_w + 16
-            pill_h = 14
+            pill_h = 16
 
-            # 深色半透明背景药丸，提升对比度
+            # 深色半透明背景药丸
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(0, 0, 0, 120))
-            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 7, 7)
+            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 8, 8)
 
-            # 文字阴影：先画深色描边，再画亮色文字
+            # 文字阴影 + 主文字
             painter.setPen(QColor(0, 0, 0, 200))
-            painter.drawText(4, h - 17, w - 8, 14, Qt.AlignHCenter, display_name)
+            painter.drawText(4, 6, w - 8, 16, Qt.AlignHCenter, display_name)
             painter.setPen(QColor(255, 255, 255, 230))
-            painter.drawText(4, h - 18, w - 8, 14, Qt.AlignHCenter, display_name)
+            painter.drawText(4, 5, w - 8, 16, Qt.AlignHCenter, display_name)
+
+        centers = [
+            w // 2 - SPACING,
+            w // 2,
+            w // 2 + SPACING,
+        ]
+        light_types = ["red", "yellow", "green"]
+        y_center = 80
+
+        for i, (cx, lt) in enumerate(zip(centers, light_types)):
+            self._draw_light_complete(painter, cx, y_center, lt, i)
+
+        # 状态标签（底部）
+        label = self._state_label()
+        if label:
+            painter.setPen(QColor(200, 210, 230, 180))
+            font = QFont(self.parent().font()) if self.parent() else QFont()
+            font.setPointSize(9)
+            font.setLetterSpacing(QFont.PercentageSpacing, 105)
+            painter.setFont(font)
+            painter.drawText(0, h - 24, w, 20, Qt.AlignHCenter, label)
 
     def _state_label(self):
         labels = {

@@ -13,8 +13,8 @@ from PyQt5.QtWidgets import QWidget, QApplication
 class TrafficLightWindow(QWidget):
     """红绿灯主窗口：玻璃拟态背景、圆角、置顶、霓虹状态边框"""
 
-    WIDTH = 200
-    HEIGHT = 148
+    WIDTH = 240
+    HEIGHT = 165
     RADIUS = 18  # 圆角半径
 
     # 状态霓虹色（alpha 用于辉光强度）
