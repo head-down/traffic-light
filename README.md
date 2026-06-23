@@ -37,7 +37,6 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 - **文件系统轮询**：CodeBuddy hook 写 `<项目名>.state` 到 `.traffic-light-states/`，守护进程 300ms 轮询，hook 延迟 ~115ms
 - **项目隔离**：`--project <name>` 绑定到指定项目，不同项目的灯完全解耦
 - **单实例锁**：Windows Mutex（`TrafficLight_<项目名>`），同一项目只允许一个守护进程
-- 可选 HTTP server（`--port N`）兼容旧 hook 脚本
 
 ## CodeBuddy 集成
 
@@ -98,9 +97,6 @@ python traffic_light.py --project mine
 
 # 或通过 bind.sh 启动
 source bind.sh --project mine
-
-# 启用 HTTP server（兼容旧 hook 脚本）
-python traffic_light.py --port 9527
 ```
 
 手动更新状态（文件系统方案）：
@@ -115,22 +111,6 @@ printf "success\n/d/DevelopTools/mine\n" > .traffic-light-states/mine.state
 rm .traffic-light-states/mine.state
 ```
 
-HTTP API（兼容模式）：
-
-```bash
-curl -X POST http://127.0.0.1:9527/state \
-  -d "{\"state\":\"running\",\"session_id\":\"agent-1\"}"
-```
-
-## HTTP API
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/state` | 更新会话状态 `{"state":"running","session_id":"agent-1"}` |
-| `GET` | `/state` | 查询聚合状态 + 活跃会话数 |
-| `POST` | `/session/end` | 结束会话 `{"session_id":"agent-1"}` |
-| `GET` | `/health` | 健康检查 |
-
 ## 依赖
 
 ```bash
@@ -143,8 +123,7 @@ pip install PyQt5
 
 | 配置项 | 说明 |
 |--------|------|
-| `--name` | 实例名称，显示在灯下方（默认 `agent`） |
-| `--port` | HTTP 起始端口，`9527` 起自动递增（默认 `0` 即禁用） |
+| `--project` | 绑定到指定项目名（对应 `<project>.state` 文件），不指定则聚合所有项目 |
 
 ## 参考项目
 
