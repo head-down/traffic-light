@@ -13,7 +13,7 @@
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="/d/software/python/python"
+PYTHON="D:/software/python/python"
 STATE_DIR="$SCRIPT_DIR/.traffic-light-states"
 
 # 解析 --project 参数
@@ -27,14 +27,14 @@ done
 
 # ---- 启动守护进程 ----
 _traffic_light_daemon() {
-    # 检查是否已有同项目守护进程在运行
+    # 检查是否已有同项目守护进程在运行 (Git Bash 无 pgrep，用 ps + grep)
     local check_pattern="traffic_light.py.*$PROJECT_ARG"
-    if [ -n "$PROJECT_ARG" ] && pgrep -f "$check_pattern" >/dev/null 2>&1; then
+    if [ -n "$PROJECT_ARG" ] && ps -eo pid,args 2>/dev/null | grep -q "$check_pattern"; then
         echo "[SignalLight] 守护进程已在运行 $PROJECT_ARG"
         return 0
     fi
     # 无 project 参数时检查是否有任何 traffic_light 进程
-    if [ -z "$PROJECT_ARG" ] && pgrep -f "traffic_light.py" >/dev/null 2>&1; then
+    if [ -z "$PROJECT_ARG" ] && ps -eo pid,args 2>/dev/null | grep -q "traffic_light.py"; then
         echo "[SignalLight] 守护进程已在运行"
         return 0
     fi
@@ -44,7 +44,7 @@ _traffic_light_daemon() {
     local pid=$!
     sleep 2
 
-    if pgrep -f "traffic_light.py" >/dev/null 2>&1; then
+    if ps -eo pid,args 2>/dev/null | grep -q "traffic_light.py"; then
         if [ -n "$PROJECT_ARG" ]; then
             echo "[SignalLight] 守护进程已启动 $PROJECT_ARG"
         else
