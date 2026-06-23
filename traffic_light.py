@@ -43,6 +43,7 @@ def main():
     state_mgr = StateManager(use_file_polling=True)
     state_mgr.state_changed.connect(panel.set_state)
     state_mgr.state_changed.connect(window.set_glow_color)
+    state_mgr.project_dir_changed.connect(panel.set_project_name)
 
     # 可选: HTTP server（兼容旧 hook 脚本，默认禁用）
     http_thread = None

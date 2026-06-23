@@ -84,6 +84,7 @@ class LightPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._state = "idle"
+        self._project_name = ""
         self._active_radius = LIGHT_RADIUS
         self._idle_radius = LIGHT_RADIUS
         self._current_color = QColor(0, 0, 0, 0)
@@ -202,6 +203,13 @@ class LightPanel(QWidget):
             self._start_idle_breathe()
 
         self.update()
+
+    def set_project_name(self, name):
+        """设置项目路径显示"""
+        display_name = name if name else ""
+        if display_name != self._project_name:
+            self._project_name = display_name
+            self.update()
 
     def _play_pop(self, on_finished=None):
         """18 -> 24(OutQuad) -> 18(OutBack) 切换弹跳"""
@@ -343,7 +351,35 @@ class LightPanel(QWidget):
             font.setPointSize(8)
             font.setLetterSpacing(QFont.PercentageSpacing, 105)
             painter.setFont(font)
-            painter.drawText(0, h - 16, w, 16, Qt.AlignHCenter, label)
+            painter.drawText(0, h - 30, w, 16, Qt.AlignHCenter, label)
+
+        # 项目路径
+        if self._project_name:
+            # 默认显示项目目录名，清晰可识别；太长时截断保留尾部
+            display_name = self._shorten_path(self._project_name, w - 24)
+            pfont = QFont(self.parent().font()) if self.parent() else QFont()
+            pfont.setPointSize(8)
+            pfont.setBold(True)
+            painter.setFont(pfont)
+
+            # 计算文本宽度，准备背景药丸
+            fm = painter.fontMetrics()
+            text_w = fm.boundingRect(display_name).width()
+            pill_x = (w - text_w) // 2 - 8
+            pill_y = h - 18
+            pill_w = text_w + 16
+            pill_h = 14
+
+            # 深色半透明背景药丸，提升对比度
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 120))
+            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 7, 7)
+
+            # 文字阴影：先画深色描边，再画亮色文字
+            painter.setPen(QColor(0, 0, 0, 200))
+            painter.drawText(4, h - 17, w - 8, 14, Qt.AlignHCenter, display_name)
+            painter.setPen(QColor(255, 255, 255, 230))
+            painter.drawText(4, h - 18, w - 8, 14, Qt.AlignHCenter, display_name)
 
     def _state_label(self):
         labels = {
@@ -355,6 +391,21 @@ class LightPanel(QWidget):
             "failure": "FAILURE",
         }
         return labels.get(self._state, "")
+
+    def _shorten_path(self, path, max_width):
+        """缩短路径显示：优先只显示项目目录名，必要时再截断"""
+        import os
+        if not path:
+            return ""
+        # 8pt 加粗字体约 5px/字符
+        max_chars = max_width // 5
+        basename = os.path.basename(path).strip()
+        if basename and len(basename) <= max_chars:
+            return basename
+        if len(path) <= max_chars:
+            return path
+        # 取尾部
+        return "..." + path[-(max_chars - 3):]
 
     def _draw_light_complete(self, painter, cx, cy, lt, index):
         """绘制一盏完整的霓虹灯（含边框、内阴影、发光、灯体、高光）"""

@@ -42,11 +42,13 @@ class StateManager(QObject):
     """管理多会话状态，按优先级聚合后通知 UI"""
 
     state_changed = pyqtSignal(str)  # 聚合后的状态
+    project_dir_changed = pyqtSignal(str)  # 当前项目路径（来自 hook）
 
     def __init__(self, use_file_polling=True):
         super().__init__()
         self._sessions = {}  # {session_id: {"state": str, "last_seen": float}}
         self._aggregated = "idle"
+        self._project_dir = ""
 
         # 轮询定时器
         self._poll_timer = QTimer(self)
@@ -66,11 +68,15 @@ class StateManager(QObject):
     def _poll_from_dir(self):
         """扫描状态目录，按优先级聚合，清理过期文件"""
         if not os.path.isdir(_STATE_DIR):
+            if self._project_dir:
+                self._project_dir = ""
+                self.project_dir_changed.emit("")
             return
 
         now = time.time()
         sessions = {}
         stale_files = []
+        project_dir = ""
 
         try:
             for fname in os.listdir(_STATE_DIR):
@@ -81,9 +87,15 @@ class StateManager(QObject):
                 try:
                     mtime = os.path.getmtime(fpath)
                     with open(fpath, "r") as f:
-                        state = f.read().strip()
+                        lines = f.read().splitlines()
+                    state = lines[0].strip() if lines else ""
                     if state not in VALID_STATES:
                         continue
+                    # 第二行：项目路径（可选，向后兼容）
+                    if len(lines) >= 2:
+                        pdir = lines[1].strip()
+                        if pdir and not project_dir:
+                            project_dir = pdir
                     # 按状态类型查 TTL
                     ttl = STATE_TTL_SECONDS.get(state, 30)
                     if ttl != float("inf") and now - mtime > ttl:
@@ -105,6 +117,16 @@ class StateManager(QObject):
         # 状态变化时重新聚合
         self._sessions = sessions
         self._recompute()
+
+        # 项目路径变化通知
+        if project_dir != self._project_dir:
+            self._project_dir = project_dir
+            self.project_dir_changed.emit(project_dir)
+
+    # ---- 属性 ----
+    @property
+    def project_dir(self):
+        return self._project_dir
 
     # ---- 会话管理（HTTP 模式兼容） ----
 

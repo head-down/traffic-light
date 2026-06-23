@@ -16,6 +16,9 @@
 
 state="${1:-running}"
 
+# 项目路径（CODEBUDDY_PROJECT_DIR 在 hook 环境可用）
+project_dir="${CODEBUDDY_PROJECT_DIR:-}"
+
 # 状态目录：traffic-light/.traffic-light-states/
 state_dir="${BASH_SOURCE[0]%/*}/../.traffic-light-states"
 
@@ -23,9 +26,8 @@ case "$state" in
     thinking|running|waiting|success|failure|idle)
         # 目录存在则跳过 mkdir，避免外部进程启动
         [ -d "$state_dir" ] || mkdir -p "$state_dir" 2>/dev/null
-        # bash 内置 echo + 重定向，零进程启动
-        # 单文件方案：所有 hook 写 current.state
-        echo "$state" > "$state_dir/current.state"
+        # 格式：第一行状态，第二行项目路径
+        printf '%s\n%s\n' "$state" "$project_dir" > "$state_dir/current.state"
         ;;
     end)
         # 会话结束：删除状态文件

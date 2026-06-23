@@ -16,9 +16,12 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 │ 🔴  🟡  🟢  │      黄灯：运行中（呼吸）
 │ SignalLight  │      绿灯：成功（脉冲）
 │  THINKING    │      蓝绿霓虹跑马灯：思考中（红→黄→绿追逐）
-│              │      红黄交替警灯：等待用户确认
+│     mine     │      红黄交替警灯：等待用户确认
 │              │      三灯暗色呼吸：空闲
 └──────────────┘
+
+窗口底部显示项目目录名（来自 `CODEBUDDY_PROJECT_DIR`），
+加粗白字 + 深色半透明背景药丸，确保在玻璃拟态面板上清晰可读。
 ```
 
 ## 星标趋势
@@ -81,10 +84,10 @@ python traffic_light.py --port 9527
 手动更新状态（文件系统方案）：
 
 ```bash
-# 写状态文件
-echo "thinking" > .traffic-light-states/current.state
-echo "running" > .traffic-light-states/current.state
-echo "success" > .traffic-light-states/current.state
+# 写状态文件（第一行状态，第二行项目路径）
+printf "thinking\n/d/DevelopTools/mine\n" > .traffic-light-states/current.state
+printf "running\n/d/DevelopTools/mine\n" > .traffic-light-states/current.state
+printf "success\n/d/DevelopTools/mine\n" > .traffic-light-states/current.state
 
 # 清除（回 idle）
 rm .traffic-light-states/current.state
