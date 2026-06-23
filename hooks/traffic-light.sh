@@ -1,17 +1,20 @@
 #!/bin/bash
 # ============================================================
-# CodeBuddy Hook — 更新红绿灯状态（文件系统方案，零进程启动）
+# CodeBuddy Hook — 更新红绿灯状态（文件系统方案）
 #
-# 用法（由 CodeBuddy 自动调用）:
-#   hooks/traffic-light.sh <state>
+# Hook → 状态 映射:
+#   SessionStart      → idle       三灯暗色呼吸（agent 就绪）
+#   UserPromptSubmit  → thinking   霓虹跑马灯（模型思考中）
+#   PostToolUse       → running    黄灯呼吸（工具执行中）
+#                      → failure   红灯双闪（工具执行失败，由 stdin 检测）
+#   Notification      → waiting    红黄警灯（等待用户确认）
+#   Stop              → success    绿灯脉冲（本轮完成，8s 后回 idle）
+#   SessionEnd        → end        清除状态文件
 #
-# 用 bash 内置 echo > 写状态文件，不启动 curl 等外部进程。
-# 守护进程 QTimer 300ms 轮询扫描状态目录，按 TTL 聚合显示。
+# 聚合优先级: waiting > failure > thinking > running > success > idle
+# 状态 TTL:   thinking 180s / running 90s / waiting 600s / success 8s / failure 30s
 #
-# 说明：CodeBuddy hook 环境不传递 CODEBUDDY_SESSION_ID，
-#       且 $$ 每次不同、$PPID 恒为 1，无法区分会话。
-#       故采用单文件方案：所有 hook 写 current.state，
-#       靠 mtime + TTL 判断状态新鲜度。
+# 项目隔离: 文件名 <项目名>.state（由 CODEBUDDY_PROJECT_DIR 提取 basename）
 # ============================================================
 
 state="${1:-running}"
