@@ -18,6 +18,12 @@ state="${1:-running}"
 
 # 项目路径（CODEBUDDY_PROJECT_DIR 在 hook 环境可用）
 project_dir="${CODEBUDDY_PROJECT_DIR:-}"
+# 提取项目目录名，作为命名空间（缺少时用 current 兼容旧方案）
+if [ -n "$project_dir" ]; then
+    project_name="$(basename "$project_dir")"
+else
+    project_name="current"
+fi
 
 # 状态目录：traffic-light/.traffic-light-states/
 state_dir="${BASH_SOURCE[0]%/*}/../.traffic-light-states"
@@ -27,11 +33,12 @@ case "$state" in
         # 目录存在则跳过 mkdir，避免外部进程启动
         [ -d "$state_dir" ] || mkdir -p "$state_dir" 2>/dev/null
         # 格式：第一行状态，第二行项目路径
-        printf '%s\n%s\n' "$state" "$project_dir" > "$state_dir/current.state"
+        # 文件名：<项目名>.state，实现项目级解耦
+        printf '%s\n%s\n' "$state" "$project_dir" > "$state_dir/$project_name.state"
         ;;
     end)
-        # 会话结束：删除状态文件
-        rm -f "$state_dir/current.state" 2>/dev/null
+        # 会话结束：删除该项目专属状态文件
+        rm -f "$state_dir/$project_name.state" 2>/dev/null
         ;;
 esac
 

@@ -25,6 +25,7 @@ from core.state_manager import StateManager
 def main():
     parser = argparse.ArgumentParser(description="信号灯守护进程")
     parser.add_argument("--port", type=int, default=0, help="HTTP 端口（0=禁用，默认文件轮询模式）")
+    parser.add_argument("--project", type=str, default=None, help="绑定项目名（对应 <project>.state），不指定则聚合所有项目")
     args = parser.parse_args()
 
     # Qt 应用
@@ -40,7 +41,7 @@ def main():
     panel.setGeometry(0, 0, window.width(), window.height())
 
     # 状态管理器（文件系统轮询模式）
-    state_mgr = StateManager(use_file_polling=True)
+    state_mgr = StateManager(use_file_polling=True, project=args.project)
     state_mgr.state_changed.connect(panel.set_state)
     state_mgr.state_changed.connect(window.set_glow_color)
     state_mgr.project_dir_changed.connect(panel.set_project_name)

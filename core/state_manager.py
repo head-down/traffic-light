@@ -44,11 +44,14 @@ class StateManager(QObject):
     state_changed = pyqtSignal(str)  # 聚合后的状态
     project_dir_changed = pyqtSignal(str)  # 当前项目路径（来自 hook）
 
-    def __init__(self, use_file_polling=True):
+    def __init__(self, use_file_polling=True, project=None):
         super().__init__()
         self._sessions = {}  # {session_id: {"state": str, "last_seen": float}}
         self._aggregated = "idle"
         self._project_dir = ""
+        # project: 指定关注的项目名，对应 <project>.state 文件
+        # None 表示聚合所有 .state 文件（兼容旧方案）
+        self._project = project
 
         # 轮询定时器
         self._poll_timer = QTimer(self)
@@ -79,6 +82,11 @@ class StateManager(QObject):
             for fname in os.listdir(_STATE_DIR):
                 if not fname.endswith(".state"):
                     continue
+                # 按项目过滤：指定 project 时只读 <project>.state
+                if self._project is not None:
+                    expected = f"{self._project}.state"
+                    if fname != expected:
+                        continue
                 sid = fname[:-6]  # 去掉 .state 后缀
                 fpath = os.path.join(_STATE_DIR, fname)
                 try:
