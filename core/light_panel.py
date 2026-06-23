@@ -1,25 +1,81 @@
 """
-三色红绿灯绘制面板 — 抗锯齿圆形 + 外发光 + 呼吸动画 + 闪烁动画
+三色红绿灯绘制面板 — Glassmorphism + Neon 风格
+
+参考: github.com/ChiFrontEnd/Chi-Frontend-Lab 的 Glassmorphism Traffic Light
+
+状态视觉语义：
+    idle      — 三灯暗色缓慢呼吸（空闲）
+    thinking  — 三灯霓虹跑马灯红→黄→绿循环（模型思考中）
+    running   — 黄灯呼吸（工具执行中）
+    waiting   — 红黄交替霓虹警灯（等待用户确认）
+    success   — 绿灯脉冲（完成）
+    failure   — 红灯双闪（失败）
 """
-from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, QPointF
-from PyQt5.QtGui import QPainter, QColor, QRadialGradient, QBrush, QPen
+from PyQt5.QtCore import (
+    Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, QPointF,
+    QSequentialAnimationGroup
+)
+from PyQt5.QtGui import QPainter, QColor, QRadialGradient, QLinearGradient, QBrush, QPen, QFont
 from PyQt5.QtWidgets import QWidget
 
 
-# 颜色定义
-COLORS = {
-    "red":    QColor(0xFF, 0x44, 0x44),
-    "yellow": QColor(0xFF, 0xAA, 0x00),
-    "green":  QColor(0x44, 0xFF, 0x44),
+# 灯体颜色定义（参考 Glassmorphism Traffic Light）
+LIGHT_COLORS = {
+    "red": {
+        "core": QColor(0xFF, 0x3B, 0x3B),
+        "mid":  QColor(0xB1, 0x00, 0x00),
+        "edge": QColor(0x57, 0x00, 0x00),
+        "glow": QColor(0xFF, 0x3B, 0x3B, 220),
+    },
+    "yellow": {
+        "core": QColor(0xFF, 0xD1, 0x66),
+        "mid":  QColor(0xC8, 0xA0, 0x32),
+        "edge": QColor(0x5A, 0x4A, 0x18),
+        "glow": QColor(0xFF, 0xD1, 0x66, 220),
+    },
+    "green": {
+        "core": QColor(0x2E, 0xE5, 0x9D),
+        "mid":  QColor(0x1A, 0xA8, 0x70),
+        "edge": QColor(0x0B, 0x3F, 0x2B),
+        "glow": QColor(0x2E, 0xE5, 0x9D, 220),
+    },
 }
 
-DIM_ALPHA = 40      # 熄灭灯的透明度
-GLOW_ALPHA = 80     # 发光最大透明度
-LIGHT_RADIUS = 18   # 灯半径（px）
-GLOW_RADIUS = 32    # 发光半径（px）
-BREATHE_MIN = 14    # 呼吸最小半径
-BREATHE_MAX = 22    # 呼吸最大半径
-SPACING = 50        # 灯心距
+DIM_ALPHA = 30            # 熄灭灯透明度（参考 --off-opacity 0.12，但提高可见度）
+GLOW_ALPHA_INNER = 130    # 内层发光 alpha
+GLOW_ALPHA_MID = 70       # 中层发光 alpha
+GLOW_ALPHA_OUTER = 30     # 外层发光 alpha
+LIGHT_RADIUS = 18         # 灯半径
+SPACING = 50              # 灯心距
+
+# 黄灯呼吸
+BREATHE_MIN = 14
+BREATHE_MAX = 22
+BREATHE_DURATION = 1200
+
+# 空闲呼吸
+IDLE_BREATHE_MIN = 15
+IDLE_BREATHE_MAX = 18
+IDLE_BREATHE_DURATION = 3000
+
+# 切换弹跳
+POP_EXPAND = 24
+POP_DURATION_UP = 150
+POP_DURATION_DOWN = 250
+
+# 成功脉冲
+SUCCESS_PULSE_MAX = 22
+SUCCESS_PULSE_DURATION = 500
+SUCCESS_SETTLE_DURATION = 300
+
+# 红灯双闪阶段 (ms): 长亮 -> 短灭 -> 短亮 -> 长灭
+BLINK_PHASES = [500, 200, 200, 500]
+
+# 跑马灯（thinking）：每灯停留时间
+CHASE_INTERVAL = 250
+
+# 红黄交替警灯（waiting）：每灯停留时间
+ALARM_INTERVAL = 300
 
 
 class LightPanel(QWidget):
@@ -28,29 +84,59 @@ class LightPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._state = "idle"
-        self._active_radius = LIGHT_RADIUS  # 当前亮灯实际半径（动画驱动）
-
-        # 闪烁定时器（红灯用）
-        self._blink_timer = QTimer(self)
-        self._blink_timer.timeout.connect(self._toggle_blink)
-        self._blink_on = True
-
+        self._active_radius = LIGHT_RADIUS
+        self._idle_radius = LIGHT_RADIUS
         self._current_color = QColor(0, 0, 0, 0)
+        self._blink_on = True
+        self._blink_phase = 0
+        self._pop_callback = None
+        self._pulse_settle = None
+
+        # 跑马灯状态（thinking）
+        self._chase_index = 0  # 0=红, 1=黄, 2=绿
+
+        # 红黄交替警灯状态（waiting）
+        self._alarm_index = 0  # 0=红, 1=黄
+
+        # 红灯双闪定时器
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._blink_step)
+
+        # 跑马灯定时器
+        self._chase_timer = QTimer(self)
+        self._chase_timer.timeout.connect(self._chase_step)
+
+        # 红黄交替警灯定时器
+        self._alarm_timer = QTimer(self)
+        self._alarm_timer.timeout.connect(self._alarm_step)
 
         # 颜色过渡动画
         self._color_anim = QPropertyAnimation(self, b"active_color")
         self._color_anim.setDuration(300)
         self._color_anim.setEasingCurve(QEasingCurve.OutCubic)
 
-        # 呼吸动画（黄灯用）
+        # 黄灯呼吸动画
         self._breathe_anim = QPropertyAnimation(self, b"active_radius")
-        self._breathe_anim.setDuration(1200)
-        self._breathe_anim.setLoopCount(-1)  # 无限循环
+        self._breathe_anim.setDuration(BREATHE_DURATION)
+        self._breathe_anim.setLoopCount(-1)
         self._breathe_anim.setEasingCurve(QEasingCurve.InOutSine)
+
+        # 空闲呼吸动画
+        self._idle_breathe = QPropertyAnimation(self, b"idle_radius")
+        self._idle_breathe.setDuration(IDLE_BREATHE_DURATION)
+        self._idle_breathe.setLoopCount(-1)
+        self._idle_breathe.setEasingCurve(QEasingCurve.InOutSine)
+
+        # 切换弹跳动画组
+        self._pop_group = QSequentialAnimationGroup()
+        self._pop_group.finished.connect(self._on_pop_finished)
+
+        # 成功脉冲动画组
+        self._pulse_group = QSequentialAnimationGroup()
 
         self.setMinimumSize(200, 100)
 
-    # ---- 属性：颜色动画 ----
+    # ---- 属性 ----
     def _get_active_color(self):
         return self._current_color
 
@@ -60,7 +146,6 @@ class LightPanel(QWidget):
 
     active_color = pyqtProperty(QColor, _get_active_color, _set_active_color)
 
-    # ---- 属性：呼吸动画 ----
     def _get_active_radius(self):
         return self._active_radius
 
@@ -70,52 +155,166 @@ class LightPanel(QWidget):
 
     active_radius = pyqtProperty(float, _get_active_radius, _set_active_radius)
 
+    def _get_idle_radius(self):
+        return self._idle_radius
+
+    def _set_idle_radius(self, r):
+        self._idle_radius = r
+        self.update()
+
+    idle_radius = pyqtProperty(float, _get_idle_radius, _set_idle_radius)
+
     # ---- 状态切换 ----
     def set_state(self, state):
         """更新显示状态"""
-        old_state = self._state
         self._state = state
 
         # 停止旧动画
         self._breathe_anim.stop()
         self._blink_timer.stop()
+        self._chase_timer.stop()
+        self._alarm_timer.stop()
+        self._pop_group.stop()
+        self._pulse_group.stop()
+        self._idle_breathe.stop()
 
-        if state == "running":
-            # 黄灯：亮起 + 呼吸动画
-            self._animate_color(COLORS["yellow"])
-            self._start_breathe()
+        # 重置半径
+        self._active_radius = LIGHT_RADIUS
+        self._idle_radius = LIGHT_RADIUS
+
+        if state == "thinking":
+            self._animate_color(QColor(0, 0, 0, 0))
+            self._start_chase()
+        elif state == "running":
+            self._animate_color(LIGHT_COLORS["yellow"]["core"])
+            self._play_pop(self._start_breathe)
+        elif state == "waiting":
+            self._animate_color(QColor(0, 0, 0, 0))
+            self._start_alarm()
         elif state == "success":
-            # 绿灯：亮起
-            self._animate_color(COLORS["green"])
-            self._active_radius = LIGHT_RADIUS
+            self._animate_color(LIGHT_COLORS["green"]["core"])
+            self._play_pop(self._play_success_pulse)
         elif state == "failure":
-            # 红灯：亮起 + 闪烁
-            self._animate_color(COLORS["red"])
-            self._active_radius = LIGHT_RADIUS
-            self._blink_on = True
-            self._blink_timer.start(500)
+            self._animate_color(LIGHT_COLORS["red"]["core"])
+            self._play_pop(self._start_blink)
         else:  # idle
             self._animate_color(QColor(0, 0, 0, 0))
-            self._active_radius = LIGHT_RADIUS
+            self._start_idle_breathe()
 
         self.update()
 
-    def _animate_color(self, target):
-        self._color_anim.stop()
-        self._color_anim.setStartValue(self._current_color)
-        self._color_anim.setEndValue(target)
-        self._color_anim.start()
+    def _play_pop(self, on_finished=None):
+        """18 -> 24(OutQuad) -> 18(OutBack) 切换弹跳"""
+        self._pop_group.stop()
+        self._pop_callback = on_finished
+        self._pop_group.clear()
+
+        pop_up = QPropertyAnimation(self, b"active_radius")
+        pop_up.setDuration(POP_DURATION_UP)
+        pop_up.setStartValue(LIGHT_RADIUS)
+        pop_up.setEndValue(POP_EXPAND)
+        pop_up.setEasingCurve(QEasingCurve.OutQuad)
+
+        pop_down = QPropertyAnimation(self, b"active_radius")
+        pop_down.setDuration(POP_DURATION_DOWN)
+        pop_down.setStartValue(POP_EXPAND)
+        pop_down.setEndValue(LIGHT_RADIUS)
+        pop_down_curve = QEasingCurve(QEasingCurve.OutBack)
+        pop_down_curve.setOvershoot(1.5)
+        pop_down.setEasingCurve(pop_down_curve)
+
+        self._pop_group.addAnimation(pop_up)
+        self._pop_group.addAnimation(pop_down)
+        self._pop_group.start()
+
+    def _on_pop_finished(self):
+        if self._pop_callback:
+            cb = self._pop_callback
+            self._pop_callback = None
+            cb()
+
+    def _play_success_pulse(self):
+        """绿灯满意脉冲"""
+        self._pulse_group.stop()
+        self._pulse_group.clear()
+
+        pulse = QPropertyAnimation(self, b"active_radius")
+        pulse.setDuration(SUCCESS_PULSE_DURATION)
+        pulse.setStartValue(LIGHT_RADIUS)
+        pulse.setEndValue(SUCCESS_PULSE_MAX)
+        pulse_curve = QEasingCurve(QEasingCurve.OutBack)
+        pulse_curve.setOvershoot(1.6)
+        pulse.setEasingCurve(pulse_curve)
+
+        settle = QPropertyAnimation(self, b"active_radius")
+        settle.setDuration(SUCCESS_SETTLE_DURATION)
+        settle.setStartValue(SUCCESS_PULSE_MAX)
+        settle.setEndValue(LIGHT_RADIUS)
+        settle.setEasingCurve(QEasingCurve.OutCubic)
+
+        self._pulse_group.addAnimation(pulse)
+        self._pulse_group.addAnimation(settle)
+        self._pulse_group.start()
 
     def _start_breathe(self):
+        """黄灯呼吸"""
         self._breathe_anim.stop()
         self._breathe_anim.setStartValue(BREATHE_MIN)
         self._breathe_anim.setEndValue(BREATHE_MAX)
         self._active_radius = BREATHE_MIN
         self._breathe_anim.start()
 
-    def _toggle_blink(self):
-        self._blink_on = not self._blink_on
+    def _start_blink(self):
+        """红灯双闪"""
+        self._blink_phase = 0
+        self._blink_on = True
+        self._blink_timer.setInterval(BLINK_PHASES[0])
+        self._blink_timer.start()
+
+    def _blink_step(self):
+        """红灯双闪状态机"""
+        self._blink_phase = (self._blink_phase + 1) % len(BLINK_PHASES)
+        self._blink_on = self._blink_phase in (0, 2)
+        self._blink_timer.setInterval(BLINK_PHASES[self._blink_phase])
         self.update()
+
+    def _start_chase(self):
+        """三灯霓虹跑马灯"""
+        self._chase_index = 0
+        self._chase_timer.setInterval(CHASE_INTERVAL)
+        self._chase_timer.start()
+        self.update()
+
+    def _chase_step(self):
+        """跑马灯推进"""
+        self._chase_index = (self._chase_index + 1) % 3
+        self.update()
+
+    def _start_alarm(self):
+        """红黄交替霓虹警灯"""
+        self._alarm_index = 0
+        self._alarm_timer.setInterval(ALARM_INTERVAL)
+        self._alarm_timer.start()
+        self.update()
+
+    def _alarm_step(self):
+        """红黄交替推进"""
+        self._alarm_index = (self._alarm_index + 1) % 2
+        self.update()
+
+    def _start_idle_breathe(self):
+        """空闲时三灯缓慢呼吸"""
+        self._idle_breathe.stop()
+        self._idle_breathe.setStartValue(IDLE_BREATHE_MIN)
+        self._idle_breathe.setEndValue(IDLE_BREATHE_MAX)
+        self._idle_radius = IDLE_BREATHE_MIN
+        self._idle_breathe.start()
+
+    def _animate_color(self, target):
+        self._color_anim.stop()
+        self._color_anim.setStartValue(self._current_color)
+        self._color_anim.setEndValue(target)
+        self._color_anim.start()
 
     # ---- 绘制 ----
     def paintEvent(self, event):
@@ -125,76 +324,171 @@ class LightPanel(QWidget):
         w = self.width()
         h = self.height()
 
-        # 三盏灯的水平中心 X
         centers = [
-            w // 2 - SPACING,   # 红灯
-            w // 2,              # 黄灯
-            w // 2 + SPACING,   # 绿灯
+            w // 2 - SPACING,
+            w // 2,
+            w // 2 + SPACING,
         ]
         light_types = ["red", "yellow", "green"]
-        y_center = h // 2 - 5   # 微上调给标签留空间
+        y_center = h // 2 - 12
 
         for i, (cx, lt) in enumerate(zip(centers, light_types)):
-            is_active = (
-                self._state != "idle"
-                and self._state == {0: "failure", 1: "running", 2: "success"}[i]
-            )
-
-            # 红灯闪烁：灭的帧不画
-            if is_active and self._state == "failure" and not self._blink_on:
-                is_active = False
-
-            color = COLORS[lt]
-            radius = self._active_radius if is_active else LIGHT_RADIUS
-
-            if is_active:
-                # 外发光
-                self._draw_glow(painter, cx, y_center, color)
-                # 灯本体
-                self._draw_light(painter, cx, y_center, color, radius)
-            else:
-                # 暗色轮廓
-                dim = QColor(color.red(), color.green(), color.blue(), DIM_ALPHA)
-                self._draw_light(painter, cx, y_center, dim, LIGHT_RADIUS)
+            self._draw_light_complete(painter, cx, y_center, lt, i)
 
         # 状态标签
-        painter.setPen(QColor(255, 255, 255, 180))
-        painter.setFont(self.parent().font())
-        label = self.parent().name if self.parent() else ""
-        painter.drawText(0, h - 8, w, 16, Qt.AlignHCenter, label)
+        label = self._state_label()
+        if label:
+            painter.setPen(QColor(200, 210, 230, 180))
+            font = QFont(self.parent().font()) if self.parent() else QFont()
+            font.setPointSize(8)
+            font.setLetterSpacing(QFont.PercentageSpacing, 105)
+            painter.setFont(font)
+            painter.drawText(0, h - 16, w, 16, Qt.AlignHCenter, label)
 
-    def _draw_glow(self, painter, cx, cy, color):
-        """径向渐变模拟外发光"""
-        for r in range(GLOW_RADIUS, 0, -4):
-            alpha = int(GLOW_ALPHA * (r / GLOW_RADIUS) ** 2)
-            c = QColor(color.red(), color.green(), color.blue(), alpha)
-            gradient = QRadialGradient(QPointF(cx, cy), r)
-            gradient.setColorAt(1, c)
-            gradient.setColorAt(0, QColor(0, 0, 0, 0))
-            painter.setBrush(QBrush(gradient))
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(QPointF(cx, cy), r, r)
+    def _state_label(self):
+        labels = {
+            "idle": "IDLE",
+            "thinking": "THINKING",
+            "running": "RUNNING",
+            "waiting": "WAITING",
+            "success": "SUCCESS",
+            "failure": "FAILURE",
+        }
+        return labels.get(self._state, "")
 
-    def _draw_light(self, painter, cx, cy, color, radius):
-        """画一个带渐变立体感的圆灯"""
-        # 径向渐变 — 中心亮边缘暗
-        gradient = QRadialGradient(QPointF(cx - radius * 0.3, cy - radius * 0.3), radius * 1.2)
-        highlight = QColor(
-            min(color.red() + 80, 255),
-            min(color.green() + 80, 255),
-            min(color.blue() + 80, 255),
-            color.alpha(),
-        )
-        gradient.setColorAt(0, highlight)
-        gradient.setColorAt(0.5, color)
-        dark = QColor(
-            max(color.red() - 60, 0),
-            max(color.green() - 60, 0),
-            max(color.blue() - 60, 0),
-            color.alpha(),
-        )
-        gradient.setColorAt(1, dark)
+    def _draw_light_complete(self, painter, cx, cy, lt, index):
+        """绘制一盏完整的霓虹灯（含边框、内阴影、发光、灯体、高光）"""
+        # 当前状态对应的亮度系数
+        intensity = self._light_intensity(index, lt)
+
+        color = LIGHT_COLORS[lt]
+        base = color["core"]
+        radius = LIGHT_RADIUS
+
+        # 实际发光半径随亮度缩放
+        glow_radius = radius * (1.0 + 0.6 * intensity)
+
+        if intensity > 0.05:
+            # 外层扩散光晕
+            self._draw_glow_layer(painter, cx, cy, base, glow_radius * 2.2,
+                                  int(GLOW_ALPHA_OUTER * intensity))
+            # 中层光晕
+            self._draw_glow_layer(painter, cx, cy, base, glow_radius * 1.5,
+                                  int(GLOW_ALPHA_MID * intensity))
+            # 内层强光
+            self._draw_glow_layer(painter, cx, cy, base, glow_radius * 1.0,
+                                  int(GLOW_ALPHA_INNER * intensity))
+
+        # 灯体底座（带边框和内阴影）
+        self._draw_light_base(painter, cx, cy, radius, intensity)
+
+        # 发光核心（LED 灯珠）
+        if intensity > 0.05:
+            self._draw_led_core(painter, cx, cy, color, radius * 0.82, intensity)
+
+        # 同心圆环装饰
+        self._draw_rings(painter, cx, cy, radius, intensity)
+
+        # 玻璃高光条（gloss）
+        self._draw_gloss(painter, cx, cy, radius, intensity)
+
+    def _light_intensity(self, index, lt):
+        """根据当前状态计算第 index 个灯的亮度系数 (0.0 ~ 1.0)"""
+        if self._state == "idle":
+            # 空闲时三灯缓慢呼吸（用 idle_radius 控制）
+            t = (self._idle_radius - IDLE_BREATHE_MIN) / (IDLE_BREATHE_MAX - IDLE_BREATHE_MIN)
+            return 0.12 + 0.18 * t
+        elif self._state == "thinking":
+            # 跑马灯平滑过渡：当前灯 1.0，其他 0.12
+            distance = abs(index - self._chase_index)
+            if distance == 0:
+                return 1.0
+            elif distance == 1:
+                return 0.12
+            else:
+                return 0.12
+        elif self._state == "waiting":
+            # 红黄交替警灯：当前灯 1.0，另一灯 0.12，第三灯 0.05
+            if lt == "red":
+                return 1.0 if self._alarm_index == 0 else 0.12
+            elif lt == "yellow":
+                return 1.0 if self._alarm_index == 1 else 0.12
+            else:
+                return 0.05
+        elif self._state == "running":
+            return 1.0 if lt == "yellow" else 0.12
+        elif self._state == "success":
+            return 1.0 if lt == "green" else 0.12
+        elif self._state == "failure":
+            if lt == "red":
+                return 1.0 if self._blink_on else 0.08
+            return 0.12
+        return 0.12
+
+    def _draw_glow_layer(self, painter, cx, cy, base_color, radius, alpha):
+        """绘制一层发光"""
+        if alpha <= 0:
+            return
+        gradient = QRadialGradient(QPointF(cx, cy), radius)
+        glow_color = QColor(base_color.red(), base_color.green(), base_color.blue(), alpha)
+        gradient.setColorAt(0.0, glow_color)
+        gradient.setColorAt(0.6, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), int(alpha * 0.4)))
+        gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.setBrush(QBrush(gradient))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+
+    def _draw_light_base(self, painter, cx, cy, radius, intensity):
+        """绘制灯体底座（深色凹槽 + 内阴影）"""
+        # 外边框
+        border_color = QColor(255, 255, 255, 25 + int(20 * intensity))
+        painter.setPen(QPen(border_color, 1.0))
+
+        # 底座渐变：上亮下暗，模拟内阴影
+        gradient = QRadialGradient(QPointF(cx, cy + radius * 0.1), radius * 1.2)
+        gradient.setColorAt(0.0, QColor(40, 44, 58, 180 + int(30 * intensity)))
+        gradient.setColorAt(0.7, QColor(20, 22, 32, 220))
+        gradient.setColorAt(1.0, QColor(10, 11, 18, 240))
+        painter.setBrush(QBrush(gradient))
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+
+    def _draw_led_core(self, painter, cx, cy, color, radius, intensity):
+        """绘制 LED 发光核心（中心白点 -> 主色 -> 深色边缘）"""
+        gradient = QRadialGradient(QPointF(cx - radius * 0.18, cy - radius * 0.18), radius * 1.35)
+
+        # 中心高光点
+        center = QColor(255, 255, 255, int(220 * intensity))
+        gradient.setColorAt(0.0, center)
+        gradient.setColorAt(0.12, QColor(color["core"].red(), color["core"].green(), color["core"].blue(), int(255 * intensity)))
+        gradient.setColorAt(0.45, QColor(color["mid"].red(), color["mid"].green(), color["mid"].blue(), int(230 * intensity)))
+        gradient.setColorAt(1.0, QColor(color["edge"].red(), color["edge"].green(), color["edge"].blue(), int(120 * intensity)))
 
         painter.setBrush(QBrush(gradient))
         painter.setPen(Qt.NoPen)
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
+
+    def _draw_rings(self, painter, cx, cy, radius, intensity):
+        """绘制同心圆环装饰"""
+        ring_alpha = 30 + int(50 * intensity)
+        painter.setPen(QPen(QColor(255, 255, 255, ring_alpha), 1.0))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPointF(cx, cy), radius * 0.68, radius * 0.68)
+        painter.setPen(QPen(QColor(255, 255, 255, int(ring_alpha * 0.6)), 0.8))
+        painter.drawEllipse(QPointF(cx, cy), radius * 0.45, radius * 0.45)
+
+    def _draw_gloss(self, painter, cx, cy, radius, intensity):
+        """绘制玻璃高光条"""
+        gloss_alpha = 60 + int(120 * intensity)
+        rect_w = int(radius * 0.32)
+        rect_h = int(radius * 1.1)
+        rect_x = int(cx - rect_w / 2)
+        rect_y = int(cy - rect_h / 2)
+
+        gradient = QLinearGradient(rect_x, rect_y, rect_x + rect_w, rect_y + rect_h)
+        gradient.setColorAt(0.0, QColor(255, 255, 255, int(0.25 * gloss_alpha)))
+        gradient.setColorAt(0.5, QColor(255, 255, 255, int(0.55 * gloss_alpha)))
+        gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
+
+        painter.setBrush(QBrush(gradient))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(rect_x, rect_y, rect_w, rect_h, rect_w / 2, rect_w / 2)

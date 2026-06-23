@@ -8,3 +8,5 @@ build/
 _*.txt
 test_*.txt
 .pytest_cache/
+.traffic-light-port
+.traffic-light-states/

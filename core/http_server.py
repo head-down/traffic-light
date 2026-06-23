@@ -103,7 +103,7 @@ class HTTPServerThread(QThread):
 
     port_bound = pyqtSignal(int)
 
-    def __init__(self, start_port, state_manager, name="agent", max_retries=10):
+    def __init__(self, start_port, state_manager, name="agent", max_retries=10, on_bound=None):
         super().__init__()
         self._start_port = start_port
         self._state_manager = state_manager
@@ -112,6 +112,7 @@ class HTTPServerThread(QThread):
         self._server = None
         self._running = True
         self._actual_port = 0
+        self._on_bound = on_bound
 
     @property
     def port(self):
@@ -128,6 +129,8 @@ class HTTPServerThread(QThread):
                 self._server = _ExclusiveHTTPServer(("127.0.0.1", port), _RequestHandler)
                 self._actual_port = port
                 self.port_bound.emit(port)
+                if self._on_bound:
+                    self._on_bound(port)
                 break
             except OSError:
                 continue

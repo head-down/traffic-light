@@ -1,57 +1,35 @@
 #!/bin/bash
 # ============================================================
-# CodeBuddy Hook — 更新红绿灯状态（信号灯聚合模式）
+# CodeBuddy Hook — 更新红绿灯状态（文件系统方案，零进程启动）
 #
 # 用法（由 CodeBuddy 自动调用）:
 #   hooks/traffic-light.sh <state>
 #
-# 自动从环境变量获取会话标识，多个 agent 并行时
-# 红绿灯按优先级聚合显示（红灯 > 黄灯 > 绿灯 > 空闲）
+# 用 bash 内置 echo > 写状态文件，不启动 curl 等外部进程。
+# 守护进程 QTimer 300ms 轮询扫描状态目录，按 TTL 聚合显示。
+#
+# 说明：CodeBuddy hook 环境不传递 CODEBUDDY_SESSION_ID，
+#       且 $$ 每次不同、$PPID 恒为 1，无法区分会话。
+#       故采用单文件方案：所有 hook 写 current.state，
+#       靠 mtime + TTL 判断状态新鲜度。
 # ============================================================
 
 state="${1:-running}"
 
-# 会话标识：优先使用 CodeBuddy 会话 ID，fallback 到终端 PID
-if [ -n "$CODEBUDDY_SESSION_ID" ]; then
-    session_id="$CODEBUDDY_SESSION_ID"
-elif [ -n "$PPID" ]; then
-    session_id="$$"
-else
-    session_id="unknown"
-fi
-
-# 端口：从文件读取（守护进程写入），或扫默认端口
-port=""
-port_file="/tmp/traffic-light-port"
-if [ -f "$port_file" ]; then
-    port=$(cat "$port_file")
-fi
-
-if [ -z "$port" ]; then
-    for p in $(seq 9527 9536); do
-        if curl -s --connect-timeout 0.5 "http://127.0.0.1:$p/health" >/dev/null 2>&1; then
-            port=$p
-            break
-        fi
-    done
-fi
-
-if [ -z "$port" ]; then
-    exit 0  # 没找到守护进程，静默退出
-fi
+# 状态目录：traffic-light/.traffic-light-states/
+state_dir="${BASH_SOURCE[0]%/*}/../.traffic-light-states"
 
 case "$state" in
-    running|success|failure|idle)
-        curl -s -X POST "http://127.0.0.1:$port/state" \
-            -H "Content-Type: application/json" \
-            -d "{\"state\":\"$state\",\"session_id\":\"$session_id\"}" \
-            >/dev/null 2>&1
+    thinking|running|waiting|success|failure|idle)
+        # 目录存在则跳过 mkdir，避免外部进程启动
+        [ -d "$state_dir" ] || mkdir -p "$state_dir" 2>/dev/null
+        # bash 内置 echo + 重定向，零进程启动
+        # 单文件方案：所有 hook 写 current.state
+        echo "$state" > "$state_dir/current.state"
         ;;
     end)
-        curl -s -X POST "http://127.0.0.1:$port/session/end" \
-            -H "Content-Type: application/json" \
-            -d "{\"session_id\":\"$session_id\"}" \
-            >/dev/null 2>&1
+        # 会话结束：删除状态文件
+        rm -f "$state_dir/current.state" 2>/dev/null
         ;;
 esac
 

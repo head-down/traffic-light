@@ -13,48 +13,23 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="/d/software/python/python"
-PORT_FILE="/tmp/traffic-light-port"
+STATE_DIR="$SCRIPT_DIR/.traffic-light-states"
 
 # ---- 启动守护进程 ----
 _traffic_light_daemon() {
-    # 检查是否已运行
-    if [ -f "$PORT_FILE" ]; then
-        local existing_port
-        existing_port=$(cat "$PORT_FILE")
-        if curl -s --connect-timeout 1 "http://127.0.0.1:$existing_port/health" >/dev/null 2>&1; then
-            export TRAFFIC_LIGHT_PORT=$existing_port
-            echo "[SignalLight] 已连接守护进程, HTTP → http://127.0.0.1:$existing_port"
-            return 0
-        fi
-        # 端口文件残留，清理
-        rm -f "$PORT_FILE"
+    # 检查是否已运行（用 tasklist 查 python 进程）
+    if pgrep -f "traffic_light.py" >/dev/null 2>&1; then
+        echo "[SignalLight] 守护进程已在运行"
+        return 0
     fi
 
-    # 扫可用端口
-    local port=""
-    for ((i=0; i<10; i++)); do
-        if ! curl -s --connect-timeout 0.5 "http://127.0.0.1:$((9527 + i))/health" >/dev/null 2>&1; then
-            port=$((9527 + i))
-            break
-        fi
-    done
-
-    if [ -z "$port" ]; then
-        echo "[SignalLight] 无法绑定端口，请检查是否已有其他实例运行"
-        return 1
-    fi
-
-    # 启动守护进程
-    "$PYTHON" "$SCRIPT_DIR/traffic_light.py" --port "$port" &
+    # 启动守护进程（文件轮询模式，无 HTTP）
+    (cd "$SCRIPT_DIR" && "$PYTHON" traffic_light.py >/dev/null 2>&1) &
     local pid=$!
     sleep 2
 
-    if [ -f "$PORT_FILE" ]; then
-        local bound_port
-        bound_port=$(cat "$PORT_FILE")
-        export TRAFFIC_LIGHT_PORT=$bound_port
-        export TRAFFIC_LIGHT_PID=$pid
-        echo "[SignalLight] 守护进程已启动, HTTP → http://127.0.0.1:$bound_port"
+    if pgrep -f "traffic_light.py" >/dev/null 2>&1; then
+        echo "[SignalLight] 守护进程已启动 (文件轮询模式)"
     else
         echo "[SignalLight] 启动失败"
         kill $pid 2>/dev/null
@@ -62,27 +37,31 @@ _traffic_light_daemon() {
     fi
 }
 
-# ---- 更新状态 ----
+# ---- 更新状态（写状态文件） ----
 light() {
     local state="${1:-}"
-    local port="${TRAFFIC_LIGHT_PORT:-}"
-
-    if [ -z "$port" ]; then
-        echo "[light] 未连接守护进程"
-        return 1
-    fi
+    local session_id="terminal-$$"
 
     case "$state" in
         running|success|failure|idle)
-            curl -s -X POST "http://127.0.0.1:$port/state" \
-                -H "Content-Type: application/json" \
-                -d "{\"state\":\"$state\",\"session_id\":\"terminal-$$\"" \
-                > /dev/null
+            [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null
+            echo "$state" > "$STATE_DIR/$session_id.state"
             echo "[light] → $state"
             ;;
         status|"")
-            curl -s "http://127.0.0.1:$port/state"
-            echo
+            # 读取所有状态文件
+            if [ -d "$STATE_DIR" ]; then
+                echo "Active sessions:"
+                for f in "$STATE_DIR"/*.state; do
+                    [ -f "$f" ] || continue
+                    local sid state_val
+                    sid="$(basename "$f" .state)"
+                    state_val="$(cat "$f" 2>/dev/null)"
+                    echo "  $sid: $state_val"
+                done
+            else
+                echo "[light] 无活动会话"
+            fi
             ;;
         *)
             echo "[light] 无效状态: $state"
