@@ -46,7 +46,7 @@ GLOW_ALPHA_INNER = 130    # 内层发光 alpha
 GLOW_ALPHA_MID = 70       # 中层发光 alpha
 GLOW_ALPHA_OUTER = 30     # 外层发光 alpha
 LIGHT_RADIUS = 20         # 灯半径
-SPACING = 55              # 灯心距
+SPACING = 65              # 灯心距
 
 # 黄灯呼吸
 BREATHE_MIN = 14
