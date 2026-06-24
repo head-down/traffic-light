@@ -13,7 +13,6 @@ import sys
 import os
 import ctypes
 import argparse
-import signal
 
 # 必须在 QApplication 创建前设置 DPI awareness
 # 系统 DPI 缩放 150%，不设置的话 GetWindowRect 返回虚拟化坐标（缩放后的），
@@ -37,317 +36,61 @@ if not _dpi_set:
         except Exception:
             pass
 
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt, QTimer, QPoint
 
 from core.overlay_window import TrafficLightWindow
 from core.light_panel import LightPanel
 from core.state_manager import StateManager
-from core.terminal_tracker import (
-    get_my_terminal,
-    find_terminal_for_codebuddy,
-    find_terminal_by_any_codebuddy,
-    get_window_rect,
-    is_window_visible_and_normal,
-)
-
-_user32 = ctypes.windll.user32
-
-# Owner 窗口绑定：让灯成为终端的 owned window
-# Windows 自动维护 z-order/最小化/销毁，无需手动 TOPMOST 轮询
-# 参考: https://blog.walterlv.com/post/set-owner-window-using-win32-api
-GWL_HWNDPARENT = -8
-SWP_FRAMECHANGED = 0x0020
-SWP_NOSIZE = 0x0001
-SWP_NOACTIVATE = 0x0010
-SWP_NOMOVE = 0x0002
-SWP_NOZORDER = 0x0004
-
-
-def _set_window_owner(light_hwnd, owner_hwnd):
-    """
-    把灯窗口的 owner 设为终端窗口。
-    设置后 Windows 自动保证：
-      - 灯始终在终端之上（z-order 跟随）
-      - 终端最小化时灯自动隐藏
-      - 终端销毁时灯自动销毁
-    返回 True 表示设置成功或已存在该 owner。
-    """
-    # 检查当前 owner 是否已经是目标窗口
-    GW_OWNER = 4
-    current_owner = _user32.GetWindow(light_hwnd, GW_OWNER)
-    if current_owner == owner_hwnd:
-        return True
-
-    # 64 位系统用 SetWindowLongPtrW，32 位回退 SetWindowLongW
-    try:
-        ret = _user32.SetWindowLongPtrW(light_hwnd, GWL_HWNDPARENT, owner_hwnd)
-    except AttributeError:
-        ret = _user32.SetWindowLongW(light_hwnd, GWL_HWNDPARENT, owner_hwnd)
-
-    if ret == 0:
-        err = ctypes.get_last_error()
-        if err != 0:
-            print(f"[SignalLight] SetWindowLongPtrW failed err={err}", flush=True)
-            return False
-
-    # GWL_HWNDPARENT 改动后需 SetWindowPos + SWP_FRAMECHANGED 刷新窗口缓存
-    _user32.SetWindowPos(
-        light_hwnd, 0, 0, 0, 0, 0,
-        SWP_FRAMECHANGED | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER
-    )
-    return True
-
-
-def _read_cbpid(project):
-    """读取 CodeBuddy 进程 PID（bind.sh 启动时写入）"""
-    pid_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.traffic-light-states')
-    cbpid_file = os.path.join(pid_dir, f"{project or 'all'}.cbpid")
-    try:
-        with open(cbpid_file) as f:
-            return int(f.read().strip())
-    except Exception:
-        return None
-
-
-def _is_process_alive(pid):
-    """检查指定 PID 的进程是否存活（Windows 用 OpenProcess，避免 os.kill 误杀）"""
-    try:
-        import ctypes
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        STILL_ACTIVE = 259
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return False
-        try:
-            exit_code = ctypes.c_ulong()
-            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                return exit_code.value == STILL_ACTIVE
-            return False
-        finally:
-            kernel32.CloseHandle(handle)
-    except Exception:
-        return False
+from core.lifecycle import LifecycleManager
+from core.terminal_adapter import TerminalAdapter
+from core.position_engine import PositionEngine
 
 
 def main():
     parser = argparse.ArgumentParser(description="信号灯守护进程")
-    parser.add_argument("--project", type=str, default=None, help="绑定项目名（对应 <project>.state），不指定则聚合所有项目")
+    parser.add_argument(
+        "--project", type=str, default=None,
+        help="绑定项目名（对应 <project>.state），不指定则聚合所有项目",
+    )
     args = parser.parse_args()
 
-    # 单实例锁：通过 PID 文件检测（bind.sh 已写 PID，此处做二次确认）
-    # 不用 Windows Mutex（进程被强杀后 Mutex 残留，永远锁死）
-    import os as _os
-    _pid_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '.traffic-light-states')
-    _pid_file = _os.path.join(_pid_dir, f"{args.project or 'all'}.pid")
-    _os.makedirs(_pid_dir, exist_ok=True)
+    pid_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), ".traffic-light-states"
+    )
 
-    if _os.path.exists(_pid_file):
-        try:
-            with open(_pid_file) as _f:
-                _old_pid = int(_f.read().strip())
-            if _is_process_alive(_old_pid):
-                print(f"[SignalLight] {args.project or 'all'} 的守护进程已在运行 (PID={_old_pid})", flush=True)
-                sys.exit(0)
-        except Exception:
-            pass
-        # 旧 PID 文件无效（进程已退出或读取失败），清理
-        try:
-            _os.remove(_pid_file)
-        except Exception:
-            pass
+    # Phase 1: 进程生命周期（PID 锁 + 日志重定向 + PID 文件写入）
+    lifecycle = LifecycleManager(args.project, pid_dir)
 
-    # redirect stdout/stderr to daemon.log — 不依赖外部重定向
-    # bind.sh 的 >>daemon.log 在 Git Bash 后台可能失效
-    _log_path = _os.path.join(_pid_dir, 'daemon.log')
-    import sys as _sys
-    _log_fd = open(_log_path, 'a', buffering=1)  # line buffered
-    _sys.stdout = _log_fd
-    _sys.stderr = _log_fd
-    print(f"[SignalLight] daemon starting --project {args.project or 'all'} PID={_os.getpid()}", flush=True)
-
-    # 写 PID 文件表示我们在运行
-    _os.makedirs(_pid_dir, exist_ok=True)
-    with open(_pid_file, 'w') as _f:
-        _f.write(str(_os.getpid()))
-
-    # Qt 应用
+    # Phase 2: Qt 应用
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("traffic-light")
 
-    # 终端窗口发现：在 Qt 事件循环前同步查找（避免 QTimer 回调中
-    # AttachConsole 干扰 Qt 主线程）
-    _cb_pid = _read_cbpid(args.project)
-    _terminal_hwnd = None
-    _term_visible = False
-    _try_terminal_discovery = True  # 首次 tick 尝试
+    lifecycle.start_heartbeat(app)
+    lifecycle.setup_signal_handlers(app)
 
-    def _discover_terminal():
-        """同步终端发现（在 tick 中首次调用）
-        
-        策略:
-          1. termwnd: GetConsoleWindow + WM_GETICON + GW_OWNER（精确）
-          2. global scan + claim: 遍历 node.exe，排除已声明 PID，找终端
-        """
-        nonlocal _terminal_hwnd, _try_terminal_discovery
-        if not _try_terminal_discovery:
-            return
-        _try_terminal_discovery = False
-
-        try:
-            # 策略1: termwnd — 直接从自己的控制台找终端窗口（精确匹配）
-            hwnd, title = get_my_terminal()
-            if not hwnd:
-                # 策略2: 全局扫描 + claim — 排除已被其他项目声明的 PID
-                hwnd, title = find_terminal_by_any_codebuddy(
-                    state_dir=_pid_dir, project_name=args.project
-                )
-            if hwnd:
-                _terminal_hwnd = hwnd
-                print(f"[SignalLight] 终端(via global): {title}", flush=True)
-                return
-
-            print(f"[SignalLight] 未找到终端窗口，使用默认位置", flush=True)
-        except Exception as e:
-            print(f"[SignalLight] 终端发现异常: {e}", flush=True)
-
-    # 窗口
+    # UI: 窗口 + 灯面板
     window = TrafficLightWindow(name="SignalLight")
-
-    # 灯面板
     panel = LightPanel(window)
     panel.setGeometry(0, 0, window.width(), window.height())
 
-    # 状态管理器（文件系统轮询）
+    # 状态管理（文件系统轮询 → UI）
     state_mgr = StateManager(project=args.project)
     state_mgr.state_changed.connect(panel.set_state)
     state_mgr.state_changed.connect(window.set_glow_color)
     state_mgr.project_dir_changed.connect(panel.set_project_name)
 
-    # 终端位置跟踪状态
-    _last_term_rect = None    # 上次终端 rect，用于变化检测
-    _hwnd_cache = None        # 灯窗口 HWND 缓存
-    _owner_set = False        # owner 关系是否已建立
-
-    def _get_light_hwnd():
-        nonlocal _hwnd_cache
-        if _hwnd_cache is None:
-            _hwnd_cache = int(window.winId())
-        return _hwnd_cache
-
-    def _tick():
-        """16ms 高频轮询：检测终端位置变化，只在变化时移动灯"""
-        nonlocal _terminal_hwnd, _term_visible, _last_term_rect, _owner_set
-
-        # 首次 tick 调用同步终端发现
-        _discover_terminal()
-        if _terminal_hwnd is not None and not _term_visible:
-            _term_visible = True
-            _last_term_rect = None
-            _owner_set = False
-
-        if _terminal_hwnd is None:
-            # 未找到终端，显示在右下角
-            if not window.isVisible():
-                screen = QApplication.primaryScreen()
-                if screen:
-                    geom = screen.availableGeometry()
-                    window.move(geom.right() - window.WIDTH - 20, geom.bottom() - window.HEIGHT - 20)
-                window.show()
-            return
-
-        # 首次绑定 owner（终端 HWND 刚拿到，或被 Qt 重置后重新建立）
-        if not _owner_set:
-            if _set_window_owner(_get_light_hwnd(), _terminal_hwnd):
-                _owner_set = True
-                print(f"[SignalLight] owner 绑定成功: light→terminal (hwnd={_terminal_hwnd})", flush=True)
-
-        visible = is_window_visible_and_normal(_terminal_hwnd)
-        if visible != _term_visible:
-            _term_visible = visible
-            if not visible:
-                if window.isVisible():
-                    window.hide()
-                _last_term_rect = None
-                return
-            else:
-                _last_term_rect = None
-
-        if not _term_visible:
-            return
-
-        rect = get_window_rect(_terminal_hwnd)
-        if rect == _last_term_rect:
-            return
-        _last_term_rect = rect
-
-        # get_window_rect 返回物理坐标，Qt move() 用逻辑坐标
-        # 转换：逻辑 = 物理 / devicePixelRatio
-        screen = QApplication.screenAt(QPoint(rect[0] + (rect[2]-rect[0])//2, rect[1] + 50))
-        if not screen:
-            screen = QApplication.primaryScreen()
-        dpr = screen.devicePixelRatio() if screen else 1.0
-
-        term_w = rect[2] - rect[0]
-        x_phys = rect[0] + (term_w - window.WIDTH * dpr) // 2
-        y_phys = rect[3] + 8
-        # 转逻辑坐标
-        x = int(x_phys / dpr)
-        y = int(y_phys / dpr)
-
-        if not window.isVisible():
-            window.show()
-            # Qt show() 可能重置 owner，下次 tick 重新建立
-            _owner_set = False
-        # 用 Qt 的 move() 处理 DPI 转换；z-order 由 owner 关系自动维护
-        window.move(x, y)
-
-    _tick_timer = QTimer(app)
-    _tick_timer.timeout.connect(_tick)
-    _tick_timer.start(16)  # 60fps 高频轮询
-    _tick()                # 首次立即执行
-
-    # CodeBuddy 存活检测：Ctrl+C 关闭 CodeBuddy 时 SessionEnd hook 不触发，
-    # 守护进程需自己感知 CodeBuddy 退出并自动关闭
-    _cb_check_count = 0  # 连续检测失败计数，避免偶发误判
-
-    def _check_codebuddy_alive():
-        nonlocal _cb_check_count
-        if _cb_pid is None:
-            return
-        if _is_process_alive(_cb_pid):
-            _cb_check_count = 0
-        else:
-            _cb_check_count += 1
-            # 连续 2 次检测失败（约 10 秒）才退出，避免进程刚启动时的抖动
-            if _cb_check_count >= 2:
-                print(f"[SignalLight] CodeBuddy (PID={_cb_pid}) exited, shutting down", flush=True)
-                app.quit()
-
-    if _cb_pid is not None:
-        _cb_watcher = QTimer(app)
-        _cb_watcher.timeout.connect(_check_codebuddy_alive)
-        _cb_watcher.start(5000)  # 每 5 秒检查一次
-
-    # Ctrl+C 优雅退出
-    def cleanup(signum=None, frame=None):
-        app.quit()
-
-    signal.signal(signal.SIGINT, cleanup)
-    signal.signal(signal.SIGTERM, cleanup)
+    # 终端发现 + 60fps 位置跟踪
+    terminal = TerminalAdapter(args.project, pid_dir)
+    position = PositionEngine(app, window, terminal)
+    position.start()
 
     try:
         app.exec_()
     except KeyboardInterrupt:
         pass
     finally:
-        try:
-            _os.remove(_pid_file)
-        except Exception:
-            pass
+        lifecycle.cleanup()
 
 
 if __name__ == "__main__":
