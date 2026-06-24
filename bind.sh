@@ -40,14 +40,47 @@ _cbpid_file() {
     echo "$STATE_DIR/$proj.cbpid"
 }
 
-# 获取 CodeBuddy 进程 PID（查找命令行匹配 codebuddy 的 node.exe 进程）
-# 用于守护进程检测 CodeBuddy 是否退出（Ctrl+C 时 SessionEnd hook 不触发）
+# 获取 CodeBuddy 进程 PID
+# 1. PowerShell 过滤命令行含 codebuddy 的 node.exe（降序）
+# 2. Python 排除已被其他 .cbpid 文件声明的 PID
+# 3. 返回第一个未被声明且有终端窗口的 CodeBuddy PID
 _get_codebuddy_pid() {
-    powershell -NoProfile -WindowStyle Hidden -Command "
+    local WIN_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
+    local proj=$(_get_project_name)
+
+    # 单次 PowerShell 获取所有 CodeBuddy node.exe PID（降序）
+    local cb_pids=$(powershell -NoProfile -WindowStyle Hidden -Command "
         Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |
         Where-Object { \$_.CommandLine -match 'codebuddy' } |
-        Select-Object -First 1 -ExpandProperty ProcessId
-    " 2>/dev/null | tr -d '\r\n '
+        Sort-Object -Property ProcessId -Descending |
+        ForEach-Object { Write-Output \$_.ProcessId }
+    " 2>/dev/null | tr '\r\n' ',' | sed 's/,$//')
+    [ -z "$cb_pids" ] && return 1
+
+    # 读取已声明 PID（排除自己项目的）
+    local claimed=""
+    for f in "$STATE_DIR"/*.cbpid; do
+        [ "$f" = "$(_cbpid_file)" ] && continue
+        local p=$(cat "$f" 2>/dev/null)
+        [ -n "$p" ] && claimed="$claimed$p,"
+    done
+    claimed="${claimed%,}"
+
+    # Python: 选第一个未声明且有终端窗口的 PID
+    "$PYTHON" -c "
+import sys
+sys.path.insert(0, '${WIN_DIR}\\core')
+from terminal_tracker import find_terminal_for_codebuddy
+cb_list = [$cb_pids]
+claimed = {$claimed}
+for pid in cb_list:
+    if pid in claimed:
+        continue
+    hwnd, _, title = find_terminal_for_codebuddy(pid)
+    if hwnd:
+        print(pid)
+        break
+" 2>/dev/null | tr -d '\r\n'
 }
 
 # ---- 启动守护进程 ----
@@ -78,8 +111,8 @@ _traffic_light_daemon() {
 
     # 启动守护进程
     # 用 python.exe（非 pythonw.exe）确保 DPI awareness 正确
-    # 用 CREATE_NO_WINDOW 标志避免控制台窗口闪烁
-    (cd "$SCRIPT_DIR" && "$PYTHON" traffic_light.py $PROJECT_ARG </dev/null >>"$STATE_DIR/daemon.log" 2>&1) &
+    # 不重定向 stdin，保留控制台连接（termwnd 算法需要 GetConsoleWindow）
+    (cd "$SCRIPT_DIR" && "$PYTHON" traffic_light.py $PROJECT_ARG >>"$STATE_DIR/daemon.log" 2>&1) &
     local bg_pid=$!
     sleep 4
 

@@ -45,7 +45,9 @@ from core.overlay_window import TrafficLightWindow
 from core.light_panel import LightPanel
 from core.state_manager import StateManager
 from core.terminal_tracker import (
+    get_my_terminal,
     find_terminal_for_codebuddy,
+    find_terminal_by_any_codebuddy,
     get_window_rect,
     is_window_visible_and_normal,
 )
@@ -140,16 +142,26 @@ def main():
     import os as _os
     _pid_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '.traffic-light-states')
     _pid_file = _os.path.join(_pid_dir, f"{args.project or 'all'}.pid")
+    _os.makedirs(_pid_dir, exist_ok=True)
+
     if _os.path.exists(_pid_file):
-        import signal as _signal
         try:
             with open(_pid_file) as _f:
                 _old_pid = int(_f.read().strip())
             _os.kill(_old_pid, 0)
-            print(f"[SignalLight] {args.project or 'all'} 的守护进程已在运行 (PID={_old_pid})")
+            print(f"[SignalLight] {args.project or 'all'} 的守护进程已在运行 (PID={_old_pid})", flush=True)
             sys.exit(0)
         except Exception:
             _os.remove(_pid_file)  # 旧 PID 文件无效，清理
+
+    # redirect stdout/stderr to daemon.log — 不依赖外部重定向
+    # bind.sh 的 >>daemon.log 在 Git Bash 后台可能失效
+    _log_path = _os.path.join(_pid_dir, 'daemon.log')
+    import sys as _sys
+    _log_fd = open(_log_path, 'a', buffering=1)  # line buffered
+    _sys.stdout = _log_fd
+    _sys.stderr = _log_fd
+    print(f"[SignalLight] daemon starting --project {args.project or 'all'} PID={_os.getpid()}", flush=True)
 
     # 写 PID 文件表示我们在运行
     _os.makedirs(_pid_dir, exist_ok=True)
@@ -160,6 +172,42 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("traffic-light")
+
+    # 终端窗口发现：在 Qt 事件循环前同步查找（避免 QTimer 回调中
+    # AttachConsole 干扰 Qt 主线程）
+    _cb_pid = _read_cbpid(args.project)
+    _terminal_hwnd = None
+    _term_visible = False
+    _try_terminal_discovery = True  # 首次 tick 尝试
+
+    def _discover_terminal():
+        """同步终端发现（在 tick 中首次调用）
+        
+        策略:
+          1. termwnd: GetConsoleWindow + WM_GETICON + GW_OWNER（精确）
+          2. global scan + claim: 遍历 node.exe，排除已声明 PID，找终端
+        """
+        nonlocal _terminal_hwnd, _try_terminal_discovery
+        if not _try_terminal_discovery:
+            return
+        _try_terminal_discovery = False
+
+        try:
+            # 策略1: termwnd — 直接从自己的控制台找终端窗口（精确匹配）
+            hwnd, title = get_my_terminal()
+            if not hwnd:
+                # 策略2: 全局扫描 + claim — 排除已被其他项目声明的 PID
+                hwnd, title = find_terminal_by_any_codebuddy(
+                    state_dir=_pid_dir, project_name=args.project
+                )
+            if hwnd:
+                _terminal_hwnd = hwnd
+                print(f"[SignalLight] 终端(via global): {title}", flush=True)
+                return
+
+            print(f"[SignalLight] 未找到终端窗口，使用默认位置", flush=True)
+        except Exception as e:
+            print(f"[SignalLight] 终端发现异常: {e}", flush=True)
 
     # 窗口
     window = TrafficLightWindow(name="SignalLight")
@@ -174,12 +222,7 @@ def main():
     state_mgr.state_changed.connect(window.set_glow_color)
     state_mgr.project_dir_changed.connect(panel.set_project_name)
 
-    # 终端窗口跟踪：16ms 高频轮询（60fps）+ 位置变化检测
-    # z-order 由 owner 关系自动维护（_set_window_owner 一次性设置），
-    # 这里只负责跟随位置
-    _cb_pid = _read_cbpid(args.project)
-    _terminal_hwnd = None
-    _term_visible = False
+    # 终端位置跟踪状态
     _last_term_rect = None    # 上次终端 rect，用于变化检测
     _hwnd_cache = None        # 灯窗口 HWND 缓存
     _owner_set = False        # owner 关系是否已建立
@@ -194,22 +237,22 @@ def main():
         """16ms 高频轮询：检测终端位置变化，只在变化时移动灯"""
         nonlocal _terminal_hwnd, _term_visible, _last_term_rect, _owner_set
 
+        # 首次 tick 调用同步终端发现
+        _discover_terminal()
+        if _terminal_hwnd is not None and not _term_visible:
+            _term_visible = True
+            _last_term_rect = None
+            _owner_set = False
+
         if _terminal_hwnd is None:
-            if _cb_pid is not None:
-                _terminal_hwnd, _term_pid, _term_title = find_terminal_for_codebuddy(_cb_pid)
-                if _terminal_hwnd is not None:
-                    print(f"[SignalLight] 终端窗口: {_term_title} (PID={_term_pid})", flush=True)
-                    _term_visible = True
-                    _last_term_rect = None
-                    _owner_set = False
-            if _terminal_hwnd is None:
-                if not window.isVisible():
-                    screen = QApplication.primaryScreen()
-                    if screen:
-                        geom = screen.availableGeometry()
-                        window.move(geom.right() - window.WIDTH - 20, geom.bottom() - window.HEIGHT - 20)
-                    window.show()
-                return
+            # 未找到终端，显示在右下角
+            if not window.isVisible():
+                screen = QApplication.primaryScreen()
+                if screen:
+                    geom = screen.availableGeometry()
+                    window.move(geom.right() - window.WIDTH - 20, geom.bottom() - window.HEIGHT - 20)
+                window.show()
+            return
 
         # 首次绑定 owner（终端 HWND 刚拿到，或被 Qt 重置后重新建立）
         if not _owner_set:
@@ -257,13 +300,10 @@ def main():
         # 用 Qt 的 move() 处理 DPI 转换；z-order 由 owner 关系自动维护
         window.move(x, y)
 
-    if _cb_pid is not None:
-        _tick_timer = QTimer(app)
-        _tick_timer.timeout.connect(_tick)
-        _tick_timer.start(16)  # 60fps 高频轮询
-        _tick()
-    else:
-        window.show()
+    _tick_timer = QTimer(app)
+    _tick_timer.timeout.connect(_tick)
+    _tick_timer.start(16)  # 60fps 高频轮询
+    _tick()                # 首次立即执行
 
     # CodeBuddy 存活检测：Ctrl+C 关闭 CodeBuddy 时 SessionEnd hook 不触发，
     # 守护进程需自己感知 CodeBuddy 退出并自动关闭
