@@ -36,7 +36,8 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 - 6 态状态机（idle / thinking / running / waiting / success / failure），QPropertyAnimation 驱动动画
 - **文件系统轮询**：CodeBuddy hook 写 `<项目名>.state` 到 `.traffic-light-states/`，守护进程 300ms 轮询，hook 延迟 ~115ms
 - **项目隔离**：`--project <name>` 绑定到指定项目，不同项目的灯完全解耦
-- **单实例锁**：Windows Mutex（`TrafficLight_<项目名>`），同一项目只允许一个守护进程
+- **PID 文件锁**：`bind.sh` 启动前自动清理旧实例，避免多守护进程叠加
+- **CodeBuddy 存活检测**：守护进程每 5 秒检查 CodeBuddy PID 是否存活，退出后约 10 秒自动关闭（兜底 Ctrl+C / 终端关闭）
 
 ## CodeBuddy 集成
 
@@ -63,24 +64,36 @@ source bind.sh --project mine
 | SessionStart | idle | 三灯暗色呼吸 | agent 就绪 |
 | UserPromptSubmit | thinking | 红黄绿霓虹跑马灯 | 模型思考中 |
 | PostToolUse | running | 黄灯呼吸 | 工具执行中 |
-| Notification | waiting | 红黄交替闪烁 | 等待用户确认 |
+| Notification | waiting（仅权限请求） | 红黄交替闪烁 | 权限确认等待 |
 | Stop | success | 绿灯脉冲（8s 后回 idle） | 本轮完成 |
-| SessionEnd | end | 清除状态文件 | 会话结束 |
+| SessionEnd | end | 清除状态 + kill 守护进程 | 会话结束 |
+
+> **注意**：Notification hook 通过 `"matcher": "permission_prompt"` 过滤，只对权限请求写 `waiting`。60 秒无输入提醒不会触发状态变化，避免会话完成后红灯误亮。
 
 **聚合优先级：** waiting > failure > thinking > running > success > idle
 
-**TTL 机制：** thinking 180s / running 90s / waiting 600s / success 8s / failure 30s，超时自动回 idle。
+**TTL 机制：** thinking 600s / running 90s / waiting 600s / success 8s / failure 30s，超时自动回 idle。thinking 延长到 600s 以支持 reasoning 模型长思考。
 
 ### 单实例锁
 
-同一项目只允许一个守护进程，第二次启动直接退出（Mutex `TrafficLight_<项目名>`）。进程退出/kill 时 Mutex 自动释放。
+同一项目只允许一个守护进程，通过 `bind.sh` 启动时自动清理旧实例（PID 文件 + PowerShell fallback）。进程退出时 PID 文件被清理。
 
 ```bash
-$ python traffic_light.py --project mine
-[SignalLight] mine 的守护进程已在运行    # 重复启动被拒绝
+$ bash bind.sh --project mine
+[SignalLight] daemon started --project mine (PID=12345)
 ```
 
-**多窗口行为：** 同一项目的多个 CodeBuddy 窗口共用一个守护进程（一盏灯），状态文件以 last-write-wins 聚合；不同项目的守护进程完全独立，互不干扰。
+### CodeBuddy 退出检测
+
+守护进程自带 CodeBuddy 存活检测：`bind.sh` 启动时记录 CodeBuddy 进程 PID 到 `.cbpid` 文件，守护进程每 5 秒检查该 PID 是否存活。CodeBuddy 退出（包括 Ctrl+C、关闭终端）后约 10 秒自动关闭。正常退出通过 SessionEnd hook 调用 `auto-stop.sh` 即时清理。
+
+| 退出方式 | 清理路径 | 延迟 |
+|----------|----------|------|
+| `/exit` 正常退出 | SessionEnd → auto-stop.sh | 即时 |
+| Ctrl+C / 关闭终端 | PID 存活检测 | ~10s |
+| 进程强杀 | PID 存活检测 | ~10s |
+
+**多窗口行为：** 同一项目的多个 CodeBuddy 窗口共用一个守护进程（一盏灯），状态文件以 last-write-wins 聚合；不同项目的守护进程完全独立，互不干扰。关闭某个窗口不会影响其他窗口的灯（只要有任意 CodeBuddy 实例存活）。
 
 > **已知限制：** CodeBuddy hook 环境不传递 `CODEBUDDY_SESSION_ID`（`$$` 每次不同、`$PPID=1`），同一项目的多个终端窗口共用同一个 `<项目名>.state` 文件，以 **last-write-wins** 聚合——灯反映最近触发 hook 的窗口状态。不同项目完全独立，互不影响。
 
@@ -89,14 +102,14 @@ $ python traffic_light.py --project mine
 ```bash
 cd traffic-light
 
-# 守护进程模式（默认文件轮询，推荐）
-python traffic_light.py
+# 通过 bind.sh 启动（推荐，自动管理生命周期）
+bash bind.sh --project mine
 
-# 绑定到指定项目（推荐）
+# 停止守护进程
+bash bind.sh stop --project mine
+
+# 或直接启动 Python
 python traffic_light.py --project mine
-
-# 或通过 bind.sh 启动
-source bind.sh --project mine
 ```
 
 手动更新状态（文件系统方案）：

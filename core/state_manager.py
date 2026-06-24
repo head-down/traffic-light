@@ -12,12 +12,12 @@ VALID_STATES = {"idle", "thinking", "running", "waiting", "success", "failure"}
 # 聚合优先级：等待确认 > 失败 > 思考 > 运行 > 成功 > 空闲
 AGGREGATE_PRIORITY = ["waiting", "failure", "thinking", "running", "success", "idle"]
 # 不同状态的 TTL：
-# - thinking 180s：模型纯思考期无 hook 触发，给 3 分钟缓冲；超时视为会话已死
+# - thinking 600s：reasoning 模型可能思考数分钟，给 10 分钟兜底；正常会被 Stop/PostToolUse 覆盖
 # - running 90s：PostToolUse 应频繁触发，90s 无更新视为完成或卡住
 # - waiting 600s：权限确认用户可能离开，给 10 分钟
 # - success 8s / failure 30s：短 TTL，让用户看到后自动回 idle
 STATE_TTL_SECONDS = {
-    "thinking": 180,
+    "thinking": 600,
     "running": 90,
     "waiting": 600,
     "success": 8,

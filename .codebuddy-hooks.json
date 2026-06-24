@@ -1,13 +1,23 @@
 {
   "_comment": "复制到项目根目录 .codebuddy/settings.local.json 或全局 ~/.codebuddy/settings.json",
-  "_note": "请将 $CODEBUDDY_PROJECT_DIR 替换为实际路径，或把 hooks/traffic-light.sh 复制到项目 .codebuddy/hooks/ 下",
+  "_note": "请将 TRAFFIC_LIGHT_DIR 替换为 traffic-light 目录的实际路径，或把 hooks/traffic-light.sh 复制到项目 .codebuddy/hooks/ 下",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh idle"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/bind.sh --project <YOUR_PROJECT> && LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh idle"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh thinking"
           }
         ]
       }
@@ -18,7 +28,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh running"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh running"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh waiting"
           }
         ]
       }
@@ -28,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh success"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh success"
           }
         ]
       }
@@ -38,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CODEBUDDY_PROJECT_DIR\"/traffic-light/hooks/traffic-light.sh end"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/auto-stop.sh"
           }
         ]
       }

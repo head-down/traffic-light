@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
 # CodeBuddy Hook — 更新红绿灯状态（文件系统方案）
+export LC_ALL=C.UTF-8
 #
 # Hook → 状态 映射:
 #   SessionStart      → idle       三灯暗色呼吸（agent 就绪）
