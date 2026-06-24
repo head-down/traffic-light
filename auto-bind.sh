@@ -21,25 +21,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.traffic-light-states/$PROJECT.pid"
 
 # ---- Kill old daemon ----
-KILLED=0
-
-# 1. Try PID file first
+# 1. Try PID file first — remove stale file, let PowerShell handle cleanup
 if [ -f "$PID_FILE" ]; then
-    OLD_PID=$(cat "$PID_FILE" 2>/dev/null)
-    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-        kill "$OLD_PID" 2>/dev/null && KILLED=1
-        echo "$(date '+%Y-%m-%d %H:%M:%S') killed old daemon PID=$OLD_PID for $PROJECT" >> "$LOG_FILE"
-        sleep 1
-    fi
     rm -f "$PID_FILE"
 fi
 
-# 2. Fallback: use PowerShell to find/kill by command line
-#    (ps on Git Bash does NOT show arguments, so grep fails)
-if [ $KILLED -eq 0 ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') trying PowerShell fallback for $PROJECT" >> "$LOG_FILE"
+# 2. Clean old daemon by command line
+echo "$(date '+%Y-%m-%d %H:%M:%S') cleaning old daemon for $PROJECT" >> "$LOG_FILE"
     powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $PROJECT' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
-fi
 
 # ---- Start daemon ----
 bash "$SCRIPT_DIR/bind.sh" --project "$PROJECT" >/dev/null 2>&1

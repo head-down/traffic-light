@@ -148,11 +148,16 @@ def main():
         try:
             with open(_pid_file) as _f:
                 _old_pid = int(_f.read().strip())
-            _os.kill(_old_pid, 0)
-            print(f"[SignalLight] {args.project or 'all'} 的守护进程已在运行 (PID={_old_pid})", flush=True)
-            sys.exit(0)
+            if _is_process_alive(_old_pid):
+                print(f"[SignalLight] {args.project or 'all'} 的守护进程已在运行 (PID={_old_pid})", flush=True)
+                sys.exit(0)
         except Exception:
-            _os.remove(_pid_file)  # 旧 PID 文件无效，清理
+            pass
+        # 旧 PID 文件无效（进程已退出或读取失败），清理
+        try:
+            _os.remove(_pid_file)
+        except Exception:
+            pass
 
     # redirect stdout/stderr to daemon.log — 不依赖外部重定向
     # bind.sh 的 >>daemon.log 在 Git Bash 后台可能失效

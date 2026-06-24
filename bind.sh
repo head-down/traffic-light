@@ -88,12 +88,8 @@ _traffic_light_daemon() {
     local pid_file=$(_pid_file)
 
     # 先杀掉旧实例
+    # kill -0 在 Git Bash/Windows 上不可靠，直接用 PowerShell 清理旧进程
     if [ -f "$pid_file" ]; then
-        local old_pid=$(cat "$pid_file" 2>/dev/null)
-        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-            kill "$old_pid" 2>/dev/null
-            sleep 1
-        fi
         rm -f "$pid_file"
     fi
     local proj=$(_get_project_name)
@@ -117,16 +113,15 @@ _traffic_light_daemon() {
     sleep 4
 
     # 读 Python 写入的 PID（os.getpid() 写入，比 bash $! 准确）
+    # PID 文件存在 = 守护进程已启动（main() 在进 Qt 事件循环前写入）
     if [ -f "$pid_file" ]; then
         local daemon_pid=$(cat "$pid_file" 2>/dev/null)
-        if [ -n "$daemon_pid" ] && kill -0 "$daemon_pid" 2>/dev/null; then
-            echo "[SignalLight] daemon started $PROJECT_ARG (PID=$daemon_pid)"
-            return 0
-        fi
+        echo "[SignalLight] daemon started $PROJECT_ARG (PID=$daemon_pid)"
+        return 0
     fi
 
-    # 回退：PID 文件未就绪但 bash 子进程尚存（pyqt 启动慢）
-    if kill -0 "$bg_pid" 2>/dev/null; then
+    # 回退：kill -0 不可靠，只检查 bg_pid 是否存在
+    if [ -n "$bg_pid" ]; then
         echo "[SignalLight] daemon started $PROJECT_ARG (PID=$bg_pid)"
         return 0
     fi
