@@ -1,11 +1,9 @@
 """
-透明置顶窗口 — Glassmorphism + Neon 风格
+透明窗口 — Glassmorphism + Neon 风格
 
 参考: github.com/ChiFrontEnd/Chi-Frontend-Lab 的 Glassmorphism Traffic Light
 """
-import ctypes
-import sys
-from PyQt5.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt5.QtGui import QPainter, QBrush, QColor, QPainterPath, QPen, QLinearGradient, QRadialGradient
 from PyQt5.QtWidgets import QWidget, QApplication
 
@@ -34,7 +32,6 @@ class TrafficLightWindow(QWidget):
         self._glow_color = QColor(140, 150, 180, 45)
 
         self._init_ui()
-        self._start_keep_on_top()
 
         # 边框颜色过渡动画
         self._glow_anim = QPropertyAnimation(self, b"glow_color")
@@ -45,10 +42,9 @@ class TrafficLightWindow(QWidget):
         self.setWindowTitle(f"Traffic Light - {self._name}")
         self.setFixedSize(self.WIDTH, self.HEIGHT)
 
-        # 无边框 + 透明背景
+        # 无边框 + 透明背景（不置顶，由 traffic_light.py 的终端跟踪器管理 z-order）
         self.setWindowFlags(
             Qt.FramelessWindowHint
-            | Qt.WindowStaysOnTopHint
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -61,27 +57,6 @@ class TrafficLightWindow(QWidget):
             x = geom.right() - self.WIDTH - 20
             y = geom.bottom() - self.HEIGHT - 20
             self.move(x, y)
-
-    def _start_keep_on_top(self):
-        """每 2 秒抬升一次，防止全屏窗口抢占"""
-        def keep():
-            if not self.isVisible():
-                return
-            try:
-                self.raise_()
-                self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-                if sys.platform == "win32":
-                    hwnd = int(self.winId())
-                    ctypes.windll.user32.SetWindowPos(
-                        hwnd, -1, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0040
-                    )
-            except Exception:
-                pass
-
-        self._topmost_timer = QTimer(self)
-        self._topmost_timer.timeout.connect(keep)
-        self._topmost_timer.start(2000)
-        keep()
 
     # ---- 属性 ----
     def _get_glow_color(self):

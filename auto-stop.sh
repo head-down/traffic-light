@@ -36,7 +36,7 @@ fi
 # 2b. Fallback: PowerShell (ps on Git Bash doesn't show arguments)
 if [ $STOPPED -eq 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') SessionEnd: trying PowerShell fallback for $PROJECT" >> "$LOG_FILE"
-    powershell -NoProfile -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $PROJECT' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
+    powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $PROJECT' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
 fi
 
 exit 0

@@ -6,6 +6,7 @@ export LC_ALL=C.UTF-8
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="D:/software/python/python"
+PYTHON_DIR="D:/software/python"
 STATE_DIR="$SCRIPT_DIR/.traffic-light-states"
 
 # 解析参数
@@ -42,7 +43,7 @@ _cbpid_file() {
 # 获取 CodeBuddy 进程 PID（查找命令行匹配 codebuddy 的 node.exe 进程）
 # 用于守护进程检测 CodeBuddy 是否退出（Ctrl+C 时 SessionEnd hook 不触发）
 _get_codebuddy_pid() {
-    powershell -NoProfile -Command "
+    powershell -NoProfile -WindowStyle Hidden -Command "
         Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |
         Where-Object { \$_.CommandLine -match 'codebuddy' } |
         Select-Object -First 1 -ExpandProperty ProcessId
@@ -63,7 +64,7 @@ _traffic_light_daemon() {
         rm -f "$pid_file"
     fi
     local proj=$(_get_project_name)
-    powershell -NoProfile -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $proj' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
+    powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $proj' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
     sleep 1
 
     # 记录 CodeBuddy 进程 PID，供守护进程检测 CodeBuddy 是否退出
@@ -75,8 +76,10 @@ _traffic_light_daemon() {
         rm -f "$cbpid_file" 2>/dev/null
     fi
 
-    # 启动守护进程（需要 cd 到脚本目录，依赖相对导入）
-    (cd "$SCRIPT_DIR" && "$PYTHON" traffic_light.py $PROJECT_ARG </dev/null >/dev/null 2>&1) &
+    # 启动守护进程
+    # 用 python.exe（非 pythonw.exe）确保 DPI awareness 正确
+    # 用 CREATE_NO_WINDOW 标志避免控制台窗口闪烁
+    (cd "$SCRIPT_DIR" && "$PYTHON" traffic_light.py $PROJECT_ARG </dev/null >>"$STATE_DIR/daemon.log" 2>&1) &
     local bg_pid=$!
     sleep 4
 
@@ -113,7 +116,7 @@ _traffic_light_stop() {
     else
         # Fallback: ps on Git Bash doesn't show args, use PowerShell
         local proj=$(_get_project_name)
-        powershell -NoProfile -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $proj' } catch { \$false } } | ForEach-Object { Write-Host \"killed PID=\$($_.Id)\"; Stop-Process -Id \$($_.Id) -Force }" 2>/dev/null || echo "[SignalLight] no daemon found for $PROJECT_ARG"
+        powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $proj' } catch { \$false } } | ForEach-Object { Write-Host \"killed PID=\$($_.Id)\"; Stop-Process -Id \$($_.Id) -Force }" 2>/dev/null || echo "[SignalLight] no daemon found for $PROJECT_ARG"
     fi
 }
 

@@ -21,11 +21,19 @@ export LC_ALL=C.UTF-8
 state="${1:-running}"
 
 # PostToolUse 发送 JSON 到 stdin，检测工具执行是否失败
+# 用 grep 检测而非 Python，避免 hook 环境调用 python.exe 时控制台窗口闪烁
 if [ ! -t 0 ] 2>/dev/null; then
     _hook_stdin=$(cat 2>/dev/null)
     if [ -n "$_hook_stdin" ]; then
-        _check_script="d:/DevelopTools/mine/traffic-light/hooks/check_failure.py"
-        if echo "$_hook_stdin" | /d/software/python/python "$_check_script" 2>/dev/null; then
+        # tool_response.success 为 false
+        if echo "$_hook_stdin" | grep -q '"success"[[:space:]]*:[[:space:]]*false'; then
+            state="failure"
+        # tool_response 包含 error 字段
+        elif echo "$_hook_stdin" | grep -q '"error"[[:space:]]*:'; then
+            state="failure"
+        # Bash 工具 exitCode 非零
+        elif echo "$_hook_stdin" | grep -q '"tool_name"[[:space:]]*:[[:space:]]*"Bash"' \
+          && echo "$_hook_stdin" | grep -q '"exitCode"[[:space:]]*:[[:space:]]*[1-9]'; then
             state="failure"
         fi
     fi

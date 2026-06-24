@@ -38,7 +38,7 @@ fi
 #    (ps on Git Bash does NOT show arguments, so grep fails)
 if [ $KILLED -eq 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') trying PowerShell fallback for $PROJECT" >> "$LOG_FILE"
-    powershell -NoProfile -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $PROJECT' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
+    powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $PROJECT' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
 fi
 
 # ---- Start daemon ----
