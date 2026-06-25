@@ -34,6 +34,7 @@ class PositionEngine:
         self._terminal = terminal
         self._owner_set = False
         self._hwnd_cache = None
+        self._first_discovery = True
 
         self._timer = QTimer(app)
         self._timer.timeout.connect(self._tick)
@@ -101,6 +102,14 @@ class PositionEngine:
 
         # 可见性变化 → 处理显示/隐藏
         vis_changed = self._terminal.update_visibility()
+
+        # 首次发现终端时强制标记为可见（匹配旧代码行为）：
+        # 旧代码在终端 HWND 首次获得时直接 _term_visible = True，
+        # 不依赖 IsWindowVisible API（部分 conhost 窗口会返回 False）
+        if self._first_discovery and self._terminal.found:
+            self._first_discovery = False
+            if not self._terminal.visible:
+                self._terminal.mark_visible()
 
         if not self._terminal.visible:
             if vis_changed and self._window.isVisible():

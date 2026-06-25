@@ -99,6 +99,10 @@ class TerminalAdapter:
     def visible(self):
         return self._visible
 
+    def mark_visible(self):
+        """首次发现终端时强制标记为可见（部分终端 IsWindowVisible 返回 False）。"""
+        self._visible = True
+
     @property
     def rect(self):
         return self._rect
