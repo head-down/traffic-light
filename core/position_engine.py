@@ -2,7 +2,10 @@
 位置引擎 — 60fps 高频轮询，让灯窗口跟随终端移动
 
 从 traffic_light.py 的 _tick 闭包提取。
-负责：owner 绑定、DPI 坐标转换、可见性驱动显示/隐藏。
+负责：owner 绑定、DPI 坐标转换。
+
+显隐由 GW_OWNER 关系自动处理（Windows 在终端最小化/还原时自动同步），
+不再通过 IsWindowVisible 手动控制（部分 conhost 窗口 API 返回 False）。
 """
 import ctypes
 from PyQt5.QtCore import QTimer, QPoint
@@ -24,8 +27,7 @@ class PositionEngine:
 
     __init__   — 创建 QTimer，不启动
     start()    — 首次 tick + 启动定时器
-    _tick()    — 每个 16ms tick 的逻辑：
-                   发现 → owner 绑定 → 可见性 → 位置更新
+    _tick()    — 每个 16ms tick：owner 绑定 → rect 更新 → 定位
     """
 
     def __init__(self, app, window, terminal):
@@ -34,7 +36,6 @@ class PositionEngine:
         self._terminal = terminal
         self._owner_set = False
         self._hwnd_cache = None
-        self._first_discovery = True
 
         self._timer = QTimer(app)
         self._timer.timeout.connect(self._tick)
@@ -53,7 +54,8 @@ class PositionEngine:
         return self._hwnd_cache
 
     def _set_window_owner(self):
-        """把灯窗口的 owner 设为终端窗口（z-order 跟随）"""
+        """把灯窗口的 owner 设为终端窗口（z-order 跟随）。
+        绑定后 Windows 自动维护显隐/最小化/销毁，无需手动轮询。"""
         light_hwnd = self._get_light_hwnd()
         owner_hwnd = self._terminal.hwnd
 
@@ -84,7 +86,8 @@ class PositionEngine:
         return True
 
     def _tick(self):
-        """16ms 高频轮询"""
+        """16ms 高频轮询：owner 绑定 + 位置跟踪。
+        显隐由 GW_OWNER 自动处理，不手动调用 show/hide。"""
         self._terminal.discover()
 
         if not self._terminal.found:
@@ -100,25 +103,8 @@ class PositionEngine:
                     flush=True,
                 )
 
-        # 可见性变化 → 处理显示/隐藏
-        vis_changed = self._terminal.update_visibility()
-
-        # 首次发现终端时强制标记为可见（匹配旧代码行为）：
-        # 旧代码在终端 HWND 首次获得时直接 _term_visible = True，
-        # 不依赖 IsWindowVisible API（部分 conhost 窗口会返回 False）
-        if self._first_discovery and self._terminal.found:
-            self._first_discovery = False
-            if not self._terminal.visible:
-                self._terminal.mark_visible()
-
-        if not self._terminal.visible:
-            if vis_changed and self._window.isVisible():
-                self._window.hide()
-            return
-
-        # 始终更新 rect（首次发现或可见性变化时 rect 可能为 None）
-        rect_changed = self._terminal.update_rect()
-        if not vis_changed and not rect_changed:
+        # 只跟踪位置变化，不干涉显隐
+        if not self._terminal.update_rect():
             return
 
         self._position_at_terminal()
