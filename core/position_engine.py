@@ -107,8 +107,9 @@ class PositionEngine:
                 self._window.hide()
             return
 
-        # 位置跟踪：可见性变化时强制 reposition（跳过 rect 等值检查）
-        if not vis_changed and not self._terminal.update_rect():
+        # 始终更新 rect（首次发现或可见性变化时 rect 可能为 None）
+        rect_changed = self._terminal.update_rect()
+        if not vis_changed and not rect_changed:
             return
 
         self._position_at_terminal()
