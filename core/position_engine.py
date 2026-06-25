@@ -2,10 +2,12 @@
 位置引擎 — 60fps 高频轮询，让灯窗口跟随终端移动
 
 从 traffic_light.py 的 _tick 闭包提取。
-负责：owner 绑定、DPI 坐标转换。
+负责：owner 绑定、可见性跟踪、DPI 坐标转换。
 
-显隐由 GW_OWNER 关系自动处理（Windows 在终端最小化/还原时自动同步），
-不再通过 IsWindowVisible 手动控制（部分 conhost 窗口 API 返回 False）。
+可见性双保险：
+  1. GW_OWNER (SetWindowLongPtrW) — z-order 跟随，终端最小化时自动隐藏
+  2. is_window_visible_and_normal — 手动 show/hide，应对 GW_OWNER 对 conhost 失效
+  首次发现终端时强制标记可见（部分 conhost 窗口 IsWindowVisible 返回 False）
 """
 import ctypes
 from PyQt5.QtCore import QTimer, QPoint
@@ -27,7 +29,7 @@ class PositionEngine:
 
     __init__   — 创建 QTimer，不启动
     start()    — 首次 tick + 启动定时器
-    _tick()    — 每个 16ms tick：owner 绑定 → rect 更新 → 定位
+    _tick()    — 每个 16ms tick：owner 绑定 → 可见性 → 位置更新
     """
 
     def __init__(self, app, window, terminal):
@@ -36,6 +38,8 @@ class PositionEngine:
         self._terminal = terminal
         self._owner_set = False
         self._hwnd_cache = None
+        self._term_visible = False
+        self._first_discovery = True
 
         self._timer = QTimer(app)
         self._timer.timeout.connect(self._tick)
@@ -55,7 +59,7 @@ class PositionEngine:
 
     def _set_window_owner(self):
         """把灯窗口的 owner 设为终端窗口（z-order 跟随）。
-        绑定后 Windows 自动维护显隐/最小化/销毁，无需手动轮询。"""
+        绑定后 Windows 自动维护显隐/最小化/销毁。"""
         light_hwnd = self._get_light_hwnd()
         owner_hwnd = self._terminal.hwnd
 
@@ -86,14 +90,21 @@ class PositionEngine:
         return True
 
     def _tick(self):
-        """16ms 高频轮询：owner 绑定 + 位置跟踪。
-        显隐由 GW_OWNER 自动处理，不手动调用 show/hide。"""
+        """16ms 高频轮询：owner 绑定 → 可见性 → 位置跟踪"""
         self._terminal.discover()
 
         if not self._terminal.found:
             self._show_at_default()
             return
 
+        # 首次发现终端：强制标记可见 + 重置 owner
+        # （匹配 pre-refactor 行为：不查 IsWindowVisible，直接标记可见）
+        if self._first_discovery:
+            self._first_discovery = False
+            self._term_visible = True
+            self._owner_set = False
+
+        # owner 绑定（首次或被 show() 重置后）
         if not self._owner_set:
             if self._set_window_owner():
                 self._owner_set = True
@@ -103,7 +114,21 @@ class PositionEngine:
                     flush=True,
                 )
 
-        # 只跟踪位置变化，不干涉显隐
+        # 可见性跟踪：终端最小化时隐藏灯，还原时显示
+        # （GW_OWNER 对 conhost 窗口可能失效，手动 show/hide 是双保险）
+        vis_changed = self._terminal.update_visibility()
+        if vis_changed:
+            if not self._terminal.visible:
+                if self._window.isVisible():
+                    self._window.hide()
+                return
+            # 可见性恢复 → 强制 reposition
+            self._terminal._rect = None
+
+        if not self._terminal.visible:
+            return
+
+        # 位置跟踪：rect 变化时重新定位
         if not self._terminal.update_rect():
             return
 
