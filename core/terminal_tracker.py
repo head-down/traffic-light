@@ -205,20 +205,9 @@ def get_my_terminal():
     传统 Conhost 路径:
       Python → GetConsoleWindow → conhost窗口 → 直接返回
 
-    bind.sh 通过 </dev/null 启动时 stdin 被重定向，GetConsoleWindow 可能返回 NULL。
-    此时通过 AttachConsole(ATTACH_PARENT_PROCESS) 回退到父进程（bash）的控制台。
-
     返回 (hwnd, title) 或 (None, None)。
     """
     hwnd = kernel32.GetConsoleWindow()
-
-    # stdin 重定向（bind.sh </dev/null）时 GetConsoleWindow 可能返回 NULL
-    if not hwnd:
-        ATTACH_PARENT_PROCESS = -1
-        kernel32.FreeConsole()
-        if kernel32.AttachConsole(ATTACH_PARENT_PROCESS):
-            hwnd = kernel32.GetConsoleWindow()
-
     if not hwnd:
         return None, None
 
