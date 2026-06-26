@@ -5,9 +5,6 @@
 export LC_ALL=C.UTF-8
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="D:/software/python/python"
-PYTHONW="D:/software/python/pythonw"
-PYTHON_DIR="D:/software/python"
 STATE_DIR="$SCRIPT_DIR/.traffic-light-states"
 
 # 解析参数
@@ -41,47 +38,37 @@ _cbpid_file() {
     echo "$STATE_DIR/$proj.cbpid"
 }
 
-# 获取 CodeBuddy 进程 PID
-# 1. PowerShell 过滤命令行含 codebuddy 的 node.exe（降序）
-# 2. Python 排除已被其他 .cbpid 文件声明的 PID
-# 3. 返回第一个未被声明且有终端窗口的 CodeBuddy PID
+# 获取 CodeBuddy 进程 PID（纯 bash，无 python.exe 调用）
+# PowerShell 过滤 node.exe 命令行含 codebuddy，排除已声明的 PID
 _get_codebuddy_pid() {
-    local WIN_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
     local proj=$(_get_project_name)
 
-    # 单次 PowerShell 获取所有 CodeBuddy node.exe PID（降序）
+    # PowerShell 获取所有 CodeBuddy node.exe PID（降序）
     local cb_pids=$(powershell -NoProfile -WindowStyle Hidden -Command "
         Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |
         Where-Object { \$_.CommandLine -match 'codebuddy' } |
         Sort-Object -Property ProcessId -Descending |
         ForEach-Object { Write-Output \$_.ProcessId }
-    " 2>/dev/null | tr '\r\n' ',' | sed 's/,$//')
+    " 2>/dev/null | tr -d '\r')
     [ -z "$cb_pids" ] && return 1
 
-    # 读取已声明 PID（排除自己项目的）
+    # 读取已声明 PID（排除自己项目）
     local claimed=""
     for f in "$STATE_DIR"/*.cbpid; do
         [ "$f" = "$(_cbpid_file)" ] && continue
-        local p=$(cat "$f" 2>/dev/null)
-        [ -n "$p" ] && claimed="$claimed$p,"
+        local p=$(cat "$f" 2>/dev/null | tr -d '\r\n')
+        [ -n "$p" ] && claimed="$claimed $p"
     done
-    claimed="${claimed%,}"
 
-    # Python: 选第一个未声明且有终端窗口的 PID
-    "$PYTHON" -c "
-import sys
-sys.path.insert(0, '${WIN_DIR}\\core')
-from terminal_tracker import find_terminal_for_codebuddy
-cb_list = [$cb_pids]
-claimed = {$claimed}
-for pid in cb_list:
-    if pid in claimed:
-        continue
-    hwnd, _, title = find_terminal_for_codebuddy(pid)
-    if hwnd:
-        print(pid)
-        break
-" 2>/dev/null | tr -d '\r\n'
+    # 选第一个未声明 PID
+    for pid in $cb_pids; do
+        local is_claimed=0
+        for c in $claimed; do
+            [ "$c" = "$pid" ] && { is_claimed=1; break; }
+        done
+        [ $is_claimed -eq 0 ] && { echo "$pid"; return 0; }
+    done
+    return 1
 }
 
 # ---- 启动守护进程 ----
@@ -107,16 +94,10 @@ _traffic_light_daemon() {
     fi
 
     # 启动守护进程
-    # python.exe 做一次性启动器（~100ms，即刻退出），pythonw.exe 常驻无窗口
-    (cd "$SCRIPT_DIR" && "$PYTHON" -c "
-import subprocess
-subprocess.Popen(
-    [r'D:\\software\\python\\pythonw.exe', 'traffic_light.py', '--project', '$proj'],
-    stdout=open('.traffic-light-states/daemon.log', 'a'),
-    stderr=subprocess.STDOUT,
-    creationflags=0x00000008   # DETACHED_PROCESS
-)
-") >/dev/null 2>&1 &
+    # PowerShell Start-Process + pythonw.exe，-WindowStyle Hidden 彻底消除黑窗
+    local WIN_SCRIPT_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
+    local WIN_STATE_DIR="${STATE_DIR:1:1}:${STATE_DIR:2}"
+    powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath 'D:\\software\\python\\pythonw.exe' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
     local bg_pid=$!
     sleep 4
 
