@@ -74,14 +74,25 @@ _get_codebuddy_pid() {
 # ---- 启动守护进程 ----
 _traffic_light_daemon() {
     local pid_file=$(_pid_file)
+    local proj=$(_get_project_name)
 
-    # 先杀掉旧实例
-    # kill -0 在 Git Bash/Windows 上不可靠，直接用 PowerShell 清理旧进程
+    # Windows 路径转换（PowerShell 不能解析 /d/... Unix 风格路径）
+    local WIN_SCRIPT_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
+    local WIN_STATE_DIR="${STATE_DIR:1:1}:${STATE_DIR:2}"
+
+    # /clear 防护 + 存活检查：PID 文件存在且进程存活 → 跳过重启
     if [ -f "$pid_file" ]; then
+        local old_pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$old_pid" ] && powershell -NoProfile -Command "Get-Process -Id $old_pid" > /dev/null 2>&1; then
+            echo "[SignalLight] daemon already running (PID=$old_pid), skipping restart"
+            return 0
+        fi
+        # 进程已死，清理旧 PID 文件
         rm -f "$pid_file"
     fi
-    local proj=$(_get_project_name)
-    powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $proj' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
+
+    # 兜底：通过 stop-daemon.ps1 清理同名残留进程（PID 文件丢失的僵尸）
+    powershell -NoProfile -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/stop-daemon.ps1" -Project "$proj"
     sleep 1
 
     # 记录 CodeBuddy 进程 PID，供守护进程检测 CodeBuddy 是否退出
@@ -95,8 +106,6 @@ _traffic_light_daemon() {
 
     # 启动守护进程
     # PowerShell Start-Process + pythonw.exe，-WindowStyle Hidden 彻底消除黑窗
-    local WIN_SCRIPT_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
-    local WIN_STATE_DIR="${STATE_DIR:1:1}:${STATE_DIR:2}"
     powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath 'D:\\software\\python\\pythonw.exe' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
     local bg_pid=$!
     sleep 4

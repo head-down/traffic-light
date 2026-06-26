@@ -20,17 +20,7 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') SessionStart PROJECT=$PROJECT PWD=$PWD" >> "$
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.traffic-light-states/$PROJECT.pid"
 
-# ---- Kill old daemon ----
-# 1. Try PID file first — remove stale file, let PowerShell handle cleanup
-if [ -f "$PID_FILE" ]; then
-    rm -f "$PID_FILE"
-fi
-
-# 2. Clean old daemon by command line
-echo "$(date '+%Y-%m-%d %H:%M:%S') cleaning old daemon for $PROJECT" >> "$LOG_FILE"
-    powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $PROJECT' } catch { \$false } } | Stop-Process -Force -ErrorAction SilentlyContinue" 2>/dev/null
-
-# ---- Start daemon ----
+# ---- Start daemon (cleanup handled by bind.sh's PID alive check + stop-daemon.ps1) ----
 bash "$SCRIPT_DIR/bind.sh" --project "$PROJECT" >/dev/null 2>&1
 
 sleep 1
