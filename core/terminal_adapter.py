@@ -4,9 +4,12 @@
 从 traffic_light.py 的 _discover_terminal 闭包提取。
 两阶段：discover() 一次性发现，后续只做缓存的状态查询。
 """
+import os
+
 from core.terminal_tracker import (
     get_my_terminal,
     find_terminal_by_any_codebuddy,
+    find_terminal_for_codebuddy,
     is_window_visible_and_normal,
     get_window_rect,
 )
@@ -16,7 +19,7 @@ class TerminalAdapter:
     """
     终端窗口发现与状态跟踪。
 
-    discover()        — 一次性发现（termwnd → global scan 降级链）
+    discover()        — 一次性发现（termwnd → cbpid → global scan 降级链）
     update_visibility() — 返回 True 表示可见性变化
     update_rect()     — 返回 True 表示位置/尺寸变化
 
@@ -43,7 +46,8 @@ class TerminalAdapter:
 
         策略:
           1. termwnd: GetConsoleWindow → WM_GETICON → GW_OWNER（精确）
-          2. global scan + claim: 遍历 node.exe，排除已声明 PID
+          2. cbpid:   读取 <project>.cbpid → find_terminal_for_codebuddy 精确定位
+          3. global scan + claim: 遍历 node.exe，排除已声明 PID（最后回退）
 
         返回 True 表示找到终端。
         """
@@ -53,6 +57,8 @@ class TerminalAdapter:
 
         try:
             hwnd, title = get_my_terminal()
+            if not hwnd and self._project:
+                hwnd, title = self._try_cbpid_terminal()
             if not hwnd:
                 hwnd, title = find_terminal_by_any_codebuddy(
                     state_dir=self._pid_dir, project_name=self._project
@@ -70,6 +76,25 @@ class TerminalAdapter:
             print(f"[SignalLight] terminal discovery error: {e}", flush=True)
 
         return False
+
+    def _try_cbpid_terminal(self):
+        """读取 <project>.cbpid 获取 CodeBuddy PID，通过进程树精确定位终端窗口。
+        返回 (hwnd, title) 或 (None, None)。"""
+        cbpid_file = os.path.join(self._pid_dir, f"{self._project}.cbpid")
+        try:
+            with open(cbpid_file) as f:
+                cb_pid = int(f.read().strip())
+        except Exception:
+            return None, None
+
+        try:
+            hwnd, pid, title = find_terminal_for_codebuddy(cb_pid)
+            if hwnd:
+                return hwnd, title
+        except Exception:
+            pass
+
+        return None, None
 
     # ---- 状态查询（含缓存更新） ----
 

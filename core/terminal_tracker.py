@@ -191,6 +191,16 @@ def _find_all_node_pids():
     return pids
 
 
+def _looks_like_codebuddy_terminal(title):
+    """快速判断终端窗口标题是否属于 CodeBuddy 会话。
+    非 CodeBuddy 终端（如 Wox node-host、独立 node.exe 等）标题通常为裸文件路径，
+    而 CodeBuddy 终端标题包含 cmd.exe / powershell / 管理员 等关键字。"""
+    if not title:
+        return False
+    key = title.lower()
+    return any(k in key for k in ('cmd.exe', 'powershell', '管理员', 'codebuddy'))
+
+
 # ============================================================
 # 策略函数
 # ============================================================
@@ -211,14 +221,16 @@ def get_my_terminal():
     if not hwnd:
         return None, None
 
-    # WM_GETICON 判断终端类型
+    # WM_GETICON 试探终端类型（Windows Terminal 返回 0）
+    # 注意：Windows 11 部分 conhost 版本也可能返回 0，不能单独依赖此判断
     WM_GETICON = 0x007F
     is_terminal = user32.SendMessageW(hwnd, WM_GETICON, 0, 0) == 0
 
     if not is_terminal:
+        # 非终端窗口（传统 conhost），直接返回
         return hwnd, _get_window_title(hwnd)
 
-    # Windows Terminal: 轮询 GW_OWNER 获取宿主窗口
+    # 可能是 Windows Terminal (ConPTY)：轮询 GW_OWNER 获取宿主窗口
     GW_OWNER = 4
     for _ in range(100):
         owner = user32.GetWindow(hwnd, GW_OWNER)
@@ -226,6 +238,10 @@ def get_my_terminal():
             return owner, _get_window_title(owner)
         time.sleep(0.005)
 
+    # GW_OWNER 未找到宿主窗口 → 可能是 conhost（被 WM_GETICON 误判）
+    # 直接返回原始窗口（Windows 11 conhost 可能返回 WM_GETICON=0）
+    if _is_valid_window(hwnd):
+        return hwnd, _get_window_title(hwnd)
     return None, None
 
 
@@ -299,6 +315,9 @@ def find_terminal_by_any_codebuddy(state_dir=None, project_name=None):
             continue
         hwnd, found_pid, title = find_terminal_for_codebuddy(pid)
         if hwnd:
+            # 跳过非 CodeBuddy 终端（如 Wox node-host、独立 node.exe）
+            if not _looks_like_codebuddy_terminal(title):
+                continue
             if state_dir and project_name:
                 try:
                     cbpid_file = os.path.join(state_dir, f"{project_name}.cbpid")

@@ -6,6 +6,7 @@ export LC_ALL=C.UTF-8
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="D:/software/python/python"
+PYTHONW="D:/software/python/pythonw"
 PYTHON_DIR="D:/software/python"
 STATE_DIR="$SCRIPT_DIR/.traffic-light-states"
 
@@ -106,9 +107,16 @@ _traffic_light_daemon() {
     fi
 
     # 启动守护进程
-    # 用 python.exe（非 pythonw.exe）确保 DPI awareness 正确
-    # 不重定向 stdin，保留控制台连接（termwnd 算法需要 GetConsoleWindow）
-    (cd "$SCRIPT_DIR" && "$PYTHON" traffic_light.py $PROJECT_ARG >>"$STATE_DIR/daemon.log" 2>&1) &
+    # python.exe 做一次性启动器（~100ms，即刻退出），pythonw.exe 常驻无窗口
+    (cd "$SCRIPT_DIR" && "$PYTHON" -c "
+import subprocess
+subprocess.Popen(
+    [r'D:\\software\\python\\pythonw.exe', 'traffic_light.py', '--project', '$proj'],
+    stdout=open('.traffic-light-states/daemon.log', 'a'),
+    stderr=subprocess.STDOUT,
+    creationflags=0x00000008   # DETACHED_PROCESS
+)
+") >/dev/null 2>&1 &
     local bg_pid=$!
     sleep 4
 
