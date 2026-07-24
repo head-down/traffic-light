@@ -98,7 +98,7 @@ _traffic_light_daemon() {
     fi
 
     # 兜底：通过 stop-daemon.ps1 清理同名残留进程（PID 文件丢失的僵尸）
-    powershell -NoProfile -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/stop-daemon.ps1" -Project "$proj"
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/stop-daemon.ps1" -Project "$proj"
     sleep 1
 
     # 记录 CodeBuddy 进程 PID，供守护进程检测 CodeBuddy 是否退出
@@ -149,18 +149,24 @@ _traffic_light_daemon() {
 # ---- 停止守护进程 ----
 _traffic_light_stop() {
     local pid_file=$(_pid_file)
+    local proj=$(_get_project_name)
+    local WIN_SCRIPT_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
 
+    # 方法1：stop-daemon.ps1（最可靠，按项目名匹配进程）
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/stop-daemon.ps1" -Project "$proj" 2>/dev/null
+
+    # 方法2：PID 文件兜底
     if [ -f "$pid_file" ]; then
         local pid=$(cat "$pid_file" 2>/dev/null)
-        if [ -n "$pid" ] && kill "$pid" 2>/dev/null; then
-            echo "[SignalLight] daemon stopped (PID=$pid) $PROJECT_ARG"
+        if [ -n "$pid" ]; then
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue" 2>/dev/null
         fi
         rm -f "$pid_file"
-    else
-        # Fallback: ps on Git Bash doesn't show args, use PowerShell
-        local proj=$(_get_project_name)
-        powershell -NoProfile -WindowStyle Hidden -Command "Get-Process -Name python* -ErrorAction SilentlyContinue | Where-Object { try { (Get-CimInstance Win32_Process -Filter \"ProcessId = \$($_.Id)\").CommandLine -match 'traffic_light.*--project $proj' } catch { \$false } } | ForEach-Object { Write-Host \"killed PID=\$($_.Id)\"; Stop-Process -Id \$($_.Id) -Force }" 2>/dev/null || echo "[SignalLight] no daemon found for $PROJECT_ARG"
     fi
+
+    # 方法3：进程名兜底（Python 脚本版残留）
+    local cbpid_file=$(_cbpid_file)
+    rm -f "$cbpid_file" 2>/dev/null
 }
 
 # ---- 更新状态 ----
