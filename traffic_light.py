@@ -54,9 +54,14 @@ def main():
     )
     args = parser.parse_args()
 
-    pid_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), ".traffic-light-states"
-    )
+    # PyInstaller 打包后 __file__ 指向 _internal/ 下层，
+    # 需要用 sys.executable 获取 EXE 所在目录
+    if getattr(sys, 'frozen', False):
+        _script_dir = os.path.dirname(sys.executable)
+    else:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    pid_dir = os.path.join(_script_dir, ".traffic-light-states")
 
     # Phase 1: 进程生命周期（PID 锁 + 日志重定向 + PID 文件写入）
     lifecycle = LifecycleManager(args.project, pid_dir)

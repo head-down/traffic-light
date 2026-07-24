@@ -9,6 +9,7 @@ StateSource 适配器:
   InMemoryStateSource  — 测试环境，纯内存存储
 """
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from PyQt5.QtCore import QObject, pyqtSignal, QTimer
@@ -27,10 +28,12 @@ STATE_TTL_SECONDS = {
 POLL_INTERVAL_MS = 300
 
 # 默认状态目录: traffic-light/.traffic-light-states/
-_DEFAULT_STATE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    ".traffic-light-states",
-)
+# PyInstaller 打包后 __file__ 指向 _internal/ 下层，用 sys.executable 获取 EXE 目录
+if getattr(sys, 'frozen', False):
+    _EXE_DIR = os.path.dirname(sys.executable)
+else:
+    _EXE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_STATE_DIR = os.path.join(_EXE_DIR, ".traffic-light-states")
 
 
 # ============================================================

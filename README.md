@@ -28,23 +28,55 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 
 [![Star History Chart](https://api.star-history.com/svg?repos=head-down/traffic-light&type=Date)](https://star-history.com/#head-down/traffic-light&Date)
 
+## 下载
+
+两种使用方式：
+
+| 方式 | 适合 | 要求 |
+|------|------|------|
+| **发布版 EXE**（推荐） | 不想装 Python 的用户 | 无，解压即用 |
+| 源码运行 | 开发者、想自己修改的用户 | Python 3.8+ |
+
+### 发布版（EXE）
+
+从 [GitHub Releases](https://github.com/head-down/traffic-light/releases) 下载 `SignalLight-v1.0.0.zip`，解压后配置 CodeBuddy hooks 即可。
+
+EXE 发布版包含所有依赖，无需安装 Python。
+
+### 源码版
+
+```bash
+git clone https://github.com/head-down/traffic-light.git
+cd traffic-light
+pip install -r requirements.txt
+```
+
 ## 快速开始
+
+### EXE 发布版（无需 Python）
+
+```bash
+# 1. 从 GitHub Releases 下载并解压 SignalLight-v1.0.0.zip
+# 2. 配置 hooks
+cp .codebuddy-hooks.json YOUR_PROJECT_DIR/.codebuddy/settings.local.json
+# 3. 打开 CodeBuddy → 自动启动（SessionStart 触发 auto-bind.sh）
+```
+
+### 源码版（开发者）
 
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/head-down/traffic-light.git
 cd traffic-light
-
-# 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. 配置 CodeBuddy hooks（复制模板到项目）
+# 2. 配置 hooks
 cp .codebuddy-hooks.json YOUR_PROJECT_DIR/.codebuddy/settings.local.json
 
-# 4. 打开 CodeBuddy → 自动启动红绿灯（SessionStart 触发 auto-bind.sh）
+# 3. 打开 CodeBuddy → 自动启动
 ```
 
-前三步只需做一次。之后每次打开 CodeBuddy 终端，灯自动出现在右下角，`/exit` 时自动关闭。
+两种方式只需配一次 hooks，之后每次打开 CodeBuddy 终端，灯自动出现在右下角，`/exit` 时自动关闭。
 
 > **注意**：`settings.local.json` 中的 `TRAFFIC_LIGHT_DIR` 需替换为实际目录路径，或把 `hooks/` 目录复制到项目 `.codebuddy/hooks/` 下。
 
@@ -161,11 +193,12 @@ rm .traffic-light-states/mine.state
 
 ## 依赖
 
+**源码版安装：**
 ```bash
 pip install -r requirements.txt
 ```
 
-运行时仅需 `PyQt5>=5.15`，无其他依赖。
+**EXE 发布版**已包含所有依赖，无需额外安装。运行时仅需 `PyQt5>=5.15`。
 
 ## 配置
 

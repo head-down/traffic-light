@@ -110,16 +110,20 @@ _traffic_light_daemon() {
         rm -f "$cbpid_file" 2>/dev/null
     fi
 
-    # 查找 pythonw.exe（从 PATH 自动检测）
-    local pythonw_path=$(_find_pythonw)
-    if [ -z "$pythonw_path" ]; then
-        echo "[SignalLight] pythonw.exe not found in PATH — install Python first"
-        return 1
+    # 优先使用同目录下的 EXE 发布版，其次回退到 Python 源码
+    local exe_path="$WIN_SCRIPT_DIR/traffic_light.exe"
+    if [ -f "$SCRIPT_DIR/traffic_light.exe" ]; then
+        # EXE 发布版：直接启动，无需 Python
+        powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '$exe_path' -ArgumentList '--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
+    else
+        # Python 源码版：查找 pythonw.exe 启动
+        local pythonw_path=$(_find_pythonw)
+        if [ -z "$pythonw_path" ]; then
+            echo "[SignalLight] pythonw.exe not found in PATH — install Python first"
+            return 1
+        fi
+        powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '$pythonw_path' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
     fi
-
-    # 启动守护进程
-    # PowerShell Start-Process + pythonw.exe，-WindowStyle Hidden 彻底消除黑窗
-    powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '$pythonw_path' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
     local bg_pid=$!
     sleep 4
 
