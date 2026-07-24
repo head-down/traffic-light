@@ -42,11 +42,11 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 从 [GitHub Releases](https://github.com/head-down/traffic-light/releases) 下载 `SignalLight-v1.0.0.zip`，解压后运行安装脚本：
 
 ```bash
-# Windows 双击运行
-install.bat <你的项目路径>
+# 全局安装（推荐）—— 一次安装，所有项目生效
+install.bat --global
 
-# 或在 Git Bash 中
-bash install.sh <你的项目路径>
+# 或项目级安装 —— 只对某个项目生效
+install.bat <你的项目路径>
 ```
 
 脚本自动配置 CodeBuddy hooks，配置完成后打开项目终端即可看到红绿灯。
@@ -67,10 +67,15 @@ pip install -r requirements.txt
 
 ```bash
 # 1. 下载并解压 SignalLight-v1.0.0.zip
-# 2. 运行一键安装脚本（自动配置 hooks）
+# 2. 运行一键安装脚本
+
+# 全局安装（推荐）—— 所有项目生效
+install.bat --global
+
+# 或项目级安装
 install.bat D:\DevelopTools\my-project
 
-# 3. 打开 CodeBuddy → 自动启动
+# 3. 打开任意 CodeBuddy 项目 → 灯自动出现
 ```
 
 ### 源码版（开发者）
@@ -81,15 +86,14 @@ git clone https://github.com/head-down/traffic-light.git
 cd traffic-light
 pip install -r requirements.txt
 
-# 2. 运行一键安装
-bash install.sh /d/DevelopTools/my-project
+# 2. 全局安装（推荐）或项目级安装
+bash install.sh --global
+# bash install.sh /d/DevelopTools/my-project
 
-# 3. 打开 CodeBuddy → 自动启动
+# 3. 打开任意 CodeBuddy 项目 → 灯自动出现
 ```
 
 两种方式只需配一次 hooks，之后每次打开 CodeBuddy 终端，灯自动出现在右下角，`/exit` 时自动关闭。
-
-> **注意**：`settings.local.json` 中的 `TRAFFIC_LIGHT_DIR` 需替换为实际目录路径，或把 `hooks/` 目录复制到项目 `.codebuddy/hooks/` 下。
 
 ### 自动启动机制
 
@@ -99,6 +103,8 @@ CodeBuddy 启动/退出时通过 hooks 自动管理守护进程生命周期：
 SessionStart → auto-bind.sh → bind.sh → 启动守护进程（记录 PID + cbpid）
 SessionEnd   → auto-stop.sh → 清理状态文件 + 杀死守护进程
 ```
+
+**全局安装**下，`auto-bind.sh` 自动从 `$CODEBUDDY_PROJECT_DIR` 提取项目名（无需硬编码），所有项目统一由全局 hook 管理。同一项目的多个 CodeBuddy 窗口共用一个守护进程，状态文件以 last-write-wins 聚合。
 
 不需要手动启动 `bind.sh`，配置文件添加 hooks 后全程自动。守护进程自带 PID 存活检测，CodeBuddy 意外关闭（Ctrl+C）后 ~10 秒自动退出。
 
@@ -115,21 +121,36 @@ SessionEnd   → auto-stop.sh → 清理状态文件 + 杀死守护进程
 
 ## Hook 配置
 
-仓库提供 `.codebuddy-hooks.json` 模板文件，复制到目标项目的 `.codebuddy/settings.local.json` 即可。
+仓库提供 `.codebuddy-hooks.json` 模板文件，安装脚本会自动合并到目标配置（智能追加，不覆盖已有 hooks）。
 
-### 自动配置（推荐）
-
-将模板复制到你的项目：
+### 方式 1：一键安装（推荐）
 
 ```bash
-# 方法 1：复制模板，修改 TRAFFIC_LIGHT_DIR
-cp traffic-light/.codebuddy-hooks.json my-project/.codebuddy/settings.local.json
-# 然后编辑 settings.local.json，将 TRAFFIC_LIGHT_DIR 替换为实际路径
+# 全局安装 —— 所有项目生效
+install.bat --global            # Windows
+bash install.sh --global        # Git Bash
 
-# 方法 2：复制 hooks 脚本到项目，避免依赖外部路径
-cp -r traffic-light/hooks/ my-project/.codebuddy/hooks/
-# 修改 settings.local.json 中的路径为 .codebuddy/hooks/traffic-light.sh
+# 项目级安装 —— 只对某个项目生效
+install.bat <项目路径>
+bash install.sh <项目路径>
 ```
+
+安装脚本会自动处理路径替换和去重，不需要手动编辑 JSON。
+
+### 方式 2：手动配置
+
+将模板复制到对应位置：
+
+```bash
+# 全局（所有项目）：~/.codebuddy/settings.json
+# 项目级：<项目根>/.codebuddy/settings.local.json
+
+cp traffic-light/.codebuddy-hooks.json ~/.codebuddy/settings.json
+# 然后编辑 settings.json，将 TRAFFIC_LIGHT_DIR 替换为实际路径
+# 将 <YOUR_PROJECT> 替换为项目名（全局安装不需要，自动检测）
+```
+
+> **全局 vs 项目级**：全局安装的 hooks 会与项目级 `settings.local.json` **合并执行**（非覆盖）。如有重复 hook，安装脚本自动跳过，不会产生双重执行。
 
 配置完成后，六种状态自动与 CodeBuddy 事件联动：
 
