@@ -48,6 +48,8 @@ $templateRaw = Get-Content $TemplatePath -Raw -Encoding UTF8
 # 将 Windows 路径转为 Git Bash 兼容的 Unix 格式
 # D:\DevelopTools\mine\traffic-light → /d/DevelopTools/mine/traffic-light
 # 必须用正斜杠，否则 bash 会把 \D \m \t 等当转义字符
+# TrimEnd 处理末尾反斜杠（D:\tools\SignalLight\ → /d/tools/SignalLight），避免双斜杠
+$SignalLightDir = $SignalLightDir.TrimEnd('\')
 $unixDir = "/" + ($SignalLightDir[0].ToString().ToLower()) + ($SignalLightDir.Substring(2) -replace '\\', '/')
 $templateRaw = $templateRaw -replace [regex]::Escape("TRAFFIC_LIGHT_DIR"), $unixDir
 

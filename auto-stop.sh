@@ -45,7 +45,7 @@ fi
 # 2b. Fallback: stop-daemon.ps1（ps on Git Bash doesn't show arguments）
 if [ $STOPPED -eq 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') SessionEnd: stop-daemon.ps1 fallback for $PROJECT" >> "$LOG_FILE"
-    powershell -NoProfile -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/stop-daemon.ps1" -Project "$PROJECT" 2>/dev/null
+    powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/stop-daemon.ps1" -Project "$PROJECT" 2>/dev/null
 fi
 
 exit 0

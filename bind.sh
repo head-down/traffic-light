@@ -124,7 +124,6 @@ _traffic_light_daemon() {
         fi
         powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '$pythonw_path' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
     fi
-    local bg_pid=$!
     sleep 4
 
     # 读 Python 写入的 PID（os.getpid() 写入，比 bash $! 准确）
@@ -135,13 +134,8 @@ _traffic_light_daemon() {
         return 0
     fi
 
-    # 回退：kill -0 不可靠，只检查 bg_pid 是否存在
-    if [ -n "$bg_pid" ]; then
-        echo "[SignalLight] daemon started $PROJECT_ARG (PID=$bg_pid)"
-        return 0
-    fi
-
-    echo "[SignalLight] start failed"
+    # PID 文件不存在 = daemon 启动失败（EXE 崩溃 / _internal 缺失 / Python 报错）
+    echo "[SignalLight] start failed (PID file not created, check daemon.log)"
     rm -f "$pid_file" 2>/dev/null
     return 1
 }
