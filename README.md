@@ -39,7 +39,17 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 
 ### 发布版（EXE）
 
-从 [GitHub Releases](https://github.com/head-down/traffic-light/releases) 下载 `SignalLight-v1.0.0.zip`，解压后配置 CodeBuddy hooks 即可。
+从 [GitHub Releases](https://github.com/head-down/traffic-light/releases) 下载 `SignalLight-v1.0.0.zip`，解压后运行安装脚本：
+
+```bash
+# Windows 双击运行
+install.bat <你的项目路径>
+
+# 或在 Git Bash 中
+bash install.sh <你的项目路径>
+```
+
+脚本自动配置 CodeBuddy hooks，配置完成后打开项目终端即可看到红绿灯。
 
 EXE 发布版包含所有依赖，无需安装 Python。
 
@@ -56,10 +66,11 @@ pip install -r requirements.txt
 ### EXE 发布版（无需 Python）
 
 ```bash
-# 1. 从 GitHub Releases 下载并解压 SignalLight-v1.0.0.zip
-# 2. 配置 hooks
-cp .codebuddy-hooks.json YOUR_PROJECT_DIR/.codebuddy/settings.local.json
-# 3. 打开 CodeBuddy → 自动启动（SessionStart 触发 auto-bind.sh）
+# 1. 下载并解压 SignalLight-v1.0.0.zip
+# 2. 运行一键安装脚本（自动配置 hooks）
+install.bat D:\DevelopTools\my-project
+
+# 3. 打开 CodeBuddy → 自动启动
 ```
 
 ### 源码版（开发者）
@@ -70,8 +81,8 @@ git clone https://github.com/head-down/traffic-light.git
 cd traffic-light
 pip install -r requirements.txt
 
-# 2. 配置 hooks
-cp .codebuddy-hooks.json YOUR_PROJECT_DIR/.codebuddy/settings.local.json
+# 2. 运行一键安装
+bash install.sh /d/DevelopTools/my-project
 
 # 3. 打开 CodeBuddy → 自动启动
 ```
