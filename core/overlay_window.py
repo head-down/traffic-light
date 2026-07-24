@@ -43,12 +43,13 @@ class TrafficLightWindow(QWidget):
         self.setFixedSize(self.WIDTH, self.HEIGHT)
 
         # 无边框 + 透明背景（不置顶，由 traffic_light.py 的终端跟踪器管理 z-order）
-        self.setWindowFlags(
-            Qt.FramelessWindowHint
-            | Qt.Tool
-        )
+        # 不用 Qt.Tool（触发 Windows 系统提示音），改用 WS_EX_TOOLWINDOW 隐藏任务栏图标
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        # 手动设置 WS_EX_TOOLWINDOW，避免 Qt.Tool 触发系统音效
+        self._set_ex_toolwindow()
 
         # 定位到屏幕右下角
         screen = QApplication.primaryScreen()
@@ -57,6 +58,15 @@ class TrafficLightWindow(QWidget):
             x = geom.right() - self.WIDTH - 20
             y = geom.bottom() - self.HEIGHT - 20
             self.move(x, y)
+
+    def _set_ex_toolwindow(self):
+        """设置 WS_EX_TOOLWINDOW 扩展样式，隐藏任务栏图标但不触发系统音效"""
+        import ctypes
+        hwnd = int(self.winId())
+        GWL_EXSTYLE = -20
+        WS_EX_TOOLWINDOW = 0x00000080
+        ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TOOLWINDOW)
 
     # ---- 属性 ----
     def _get_glow_color(self):
