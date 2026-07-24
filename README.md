@@ -28,6 +28,37 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 
 [![Star History Chart](https://api.star-history.com/svg?repos=head-down/traffic-light&type=Date)](https://star-history.com/#head-down/traffic-light&Date)
 
+## 快速开始
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/head-down/traffic-light.git
+cd traffic-light
+
+# 2. 安装依赖
+pip install -r requirements.txt
+
+# 3. 配置 CodeBuddy hooks（复制模板到项目）
+cp .codebuddy-hooks.json YOUR_PROJECT_DIR/.codebuddy/settings.local.json
+
+# 4. 打开 CodeBuddy → 自动启动红绿灯（SessionStart 触发 auto-bind.sh）
+```
+
+前三步只需做一次。之后每次打开 CodeBuddy 终端，灯自动出现在右下角，`/exit` 时自动关闭。
+
+> **注意**：`settings.local.json` 中的 `TRAFFIC_LIGHT_DIR` 需替换为实际目录路径，或把 `hooks/` 目录复制到项目 `.codebuddy/hooks/` 下。
+
+### 自动启动机制
+
+CodeBuddy 启动/退出时通过 hooks 自动管理守护进程生命周期：
+
+```
+SessionStart → auto-bind.sh → bind.sh → 启动守护进程（记录 PID + cbpid）
+SessionEnd   → auto-stop.sh → 清理状态文件 + 杀死守护进程
+```
+
+不需要手动启动 `bind.sh`，配置文件添加 hooks 后全程自动。守护进程自带 PID 存活检测，CodeBuddy 意外关闭（Ctrl+C）后 ~10 秒自动退出。
+
 ## 原理
 
 - PyQt5 绘制无边框透明窗口，通过 `SetWindowPos(HWND_TOPMOST)` + 2 秒循环抬升保持置顶
@@ -39,36 +70,36 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 - **PID 文件锁**：`bind.sh` 启动前自动清理旧实例，避免多守护进程叠加
 - **CodeBuddy 存活检测**：守护进程每 5 秒检查 CodeBuddy PID 是否存活，退出后约 10 秒自动关闭（兜底 Ctrl+C / 终端关闭）
 
-## CodeBuddy 集成
+## Hook 配置
 
-状态文件按项目名隔离，`--project <name>` 绑定到指定项目：
+仓库提供 `.codebuddy-hooks.json` 模板文件，复制到目标项目的 `.codebuddy/settings.local.json` 即可。
+
+### 自动配置（推荐）
+
+将模板复制到你的项目：
 
 ```bash
-# 1. 启动守护进程（每项目一次）
-python traffic_light.py --project mine          # mine 项目的灯
+# 方法 1：复制模板，修改 TRAFFIC_LIGHT_DIR
+cp traffic-light/.codebuddy-hooks.json my-project/.codebuddy/settings.local.json
+# 然后编辑 settings.local.json，将 TRAFFIC_LIGHT_DIR 替换为实际路径
 
-# 2. 或通过 bind.sh 启动
-source bind.sh --project mine
+# 方法 2：复制 hooks 脚本到项目，避免依赖外部路径
+cp -r traffic-light/hooks/ my-project/.codebuddy/hooks/
+# 修改 settings.local.json 中的路径为 .codebuddy/hooks/traffic-light.sh
 ```
 
-不指定 `--project` 时聚合所有项目状态（向后兼容）。
-
-### 为新项目配置
-
-在项目的 `.codebuddy/settings.local.json` 中添加 hook 配置，hook 自动从 `CODEBUDDY_PROJECT_DIR` 提取项目名写对应 `.state` 文件。
-
-之后打开该项目的 CodeBuddy 终端，agent 自动更新红绿灯：
+配置完成后，六种状态自动与 CodeBuddy 事件联动：
 
 | Hook 事件 | 灯状态 | 动画 | 说明 |
 |-----------|--------|------|------|
-| SessionStart | idle | 三灯暗色呼吸 | agent 就绪 |
+| SessionStart | idle | 三灯暗色呼吸 → 启动守护进程 | agent 就绪 |
 | UserPromptSubmit | thinking | 红黄绿霓虹跑马灯 | 模型思考中 |
 | PostToolUse | running | 黄灯呼吸 | 工具执行中 |
-| Notification | waiting（仅权限请求） | 红黄交替闪烁 | 权限确认等待 |
+| Notification | waiting | 红黄交替警灯（仅权限请求） | 等待用户确认 |
 | Stop | success | 绿灯脉冲（8s 后回 idle） | 本轮完成 |
-| SessionEnd | end | 清除状态 + kill 守护进程 | 会话结束 |
+| SessionEnd | end | 清除状态 + 杀死守护进程 | 会话结束 |
 
-> **注意**：Notification hook 通过 `"matcher": "permission_prompt"` 过滤，只对权限请求写 `waiting`。60 秒无输入提醒不会触发状态变化，避免会话完成后红灯误亮。
+> **注意**：Notification hook 通过 `"matcher": "permission_prompt"` 过滤，只对权限请求写 `waiting`。60 秒无输入提醒不会触发状态变化。PostToolUse 自动检测失败（`success: false` / `exitCode != 0`），工具失败时亮红灯。
 
 **聚合优先级：** waiting > failure > thinking > running > success > idle
 
@@ -97,22 +128,26 @@ $ bash bind.sh --project mine
 
 > **已知限制：** CodeBuddy hook 环境不传递 `CODEBUDDY_SESSION_ID`（`$$` 每次不同、`$PPID=1`），同一项目的多个终端窗口共用同一个 `<项目名>.state` 文件，以 **last-write-wins** 聚合——灯反映最近触发 hook 的窗口状态。不同项目完全独立，互不影响。
 
-## 运行
+## 手动运行 / 调试
+
+如果不用 hook 自动启动，也可以手动控制：
 
 ```bash
 cd traffic-light
 
-# 通过 bind.sh 启动（推荐，自动管理生命周期）
+# 启动守护进程（自动管理生命周期、PID 锁、cbpid 检测）
 bash bind.sh --project mine
 
 # 停止守护进程
 bash bind.sh stop --project mine
 
-# 或直接启动 Python
+# 直接启动 Python（无 cbpid 检测，CodeBuddy 退出后需手动关闭）
 python traffic_light.py --project mine
 ```
 
-手动更新状态（文件系统方案）：
+不指定 `--project` 时聚合所有项目状态（向后兼容）。
+
+手动更新状态（调试用途）：
 
 ```bash
 # 写状态文件（第一行状态，第二行项目路径）
@@ -127,8 +162,10 @@ rm .traffic-light-states/mine.state
 ## 依赖
 
 ```bash
-pip install PyQt5
+pip install -r requirements.txt
 ```
+
+运行时仅需 `PyQt5>=5.15`，无其他依赖。
 
 ## 配置
 
