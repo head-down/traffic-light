@@ -5,6 +5,9 @@ __pycache__/
 dist/
 build/
 *.spec
+_internal/
+traffic_light.exe
+SignalLight-*.zip
 _*.txt
 test_*.txt
 .pytest_cache/
