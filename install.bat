@@ -7,17 +7,10 @@
 ::   install.bat D:\DevelopTools\my-project
 ::   install.bat .          (安装到当前目录)
 ::
-:: 脚本会自动:
-::   1. 提取项目名作为标识
-::   2. 复制 hooks 配置到项目的 .codebuddy\settings.local.json
-::   3. 替换 TRAFFIC_LIGHT_DIR 为当前目录路径
+:: 智能合并：已有 settings.local.json 时只追加 SignalLight hooks，
+:: 保留用户已有的环境变量、权限、其他 hooks 等配置。
 :: ============================================================
 setlocal enabledelayedexpansion
-
-set "CYAN=[0;36m"
-set "GREEN=[0;32m"
-set "YELLOW=[1;33m"
-set "RED=[0;31m"
 
 echo ========================================
 echo   SignalLight 一键安装程序
@@ -40,7 +33,6 @@ if "%TARGET_PROJECT%"=="" (
     set /p TARGET_PROJECT="请输入项目路径: "
 )
 
-:: 规范化路径
 pushd "%TARGET_PROJECT%" 2>nul || (
     echo 错误: 项目目录不存在
     pause
@@ -49,7 +41,6 @@ pushd "%TARGET_PROJECT%" 2>nul || (
 set "TARGET_PROJECT=%CD%"
 popd
 
-:: ---- 提取项目名 ----
 for %%I in ("%TARGET_PROJECT%") do set "PROJECT_NAME=%%~nxI"
 
 echo 安装目录: %SCRIPT_DIR%
@@ -65,74 +56,55 @@ if not exist "%SCRIPT_DIR%\traffic_light.exe" if not exist "%SCRIPT_DIR%\traffic
     exit /b 1
 )
 
-if not exist "%SCRIPT_DIR%\.codebuddy-hooks.json" (
-    echo 错误: 找不到 .codebuddy-hooks.json 模板文件
-    pause
-    exit /b 1
-)
+:: ---- 调用 merge-hooks.ps1 智能合并 ----
+set "TEMPLATE=%SCRIPT_DIR%\.codebuddy-hooks.json"
+set "OUTPUT=%TARGET_PROJECT%\.codebuddy\settings.local.json"
 
-:: ---- 创建 .codebuddy 目录 ----
-set "HOOKS_DIR=%TARGET_PROJECT%\.codebuddy"
-if not exist "%HOOKS_DIR%" (
-    mkdir "%HOOKS_DIR%"
-    echo + 创建 %HOOKS_DIR%
-)
-
-:: ---- 生成 settings.local.json ----
-set "OUTPUT_FILE=%HOOKS_DIR%\settings.local.json"
-
-if exist "%OUTPUT_FILE%" (
-    echo ! %OUTPUT_FILE% 已存在
-    set /p CONFIRM="是否覆盖? [y/N]: "
-    if /i not "!CONFIRM!"=="y" (
-        echo 已跳过。如需重新安装请删除该文件后重试。
-        pause
-        exit /b 0
-    )
-    copy "%OUTPUT_FILE%" "%OUTPUT_FILE%.bak" >nul
-    echo   已备份到 %OUTPUT_FILE%.bak
-)
-
-:: 使用 PowerShell 替换占位符（batch 不擅长文本处理）
-:: TRAFFIC_LIGHT_DIR -> SignalLight 目录 (Windows 路径，双反斜杠用于 JSON)
-:: <YOUR_PROJECT> -> 项目目录名
-set "WIN_PATH=%SCRIPT_DIR:\=\\%"
-
-powershell -NoProfile -Command ^
-    "$template = Get-Content '%SCRIPT_DIR%\.codebuddy-hooks.json' -Raw -Encoding UTF8; ^
-     $template = $template -replace 'TRAFFIC_LIGHT_DIR', '%SCRIPT_DIR%'; ^
-     $template = $template -replace '<YOUR_PROJECT>', '%PROJECT_NAME%'; ^
-     Set-Content -Path '%OUTPUT_FILE%' -Value $template -Encoding UTF8 -NoNewline"
-
-if %ERRORLEVEL% neq 0 (
-    echo 错误: 写入配置文件失败
-    pause
-    exit /b 1
-)
-
-echo + 写入 %OUTPUT_FILE%
+echo 正在合并 hooks 配置...
 echo.
 
-:: ---- 检查 bash ----
-where bash >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo OK bash 可用
-) else (
-    echo 注意: 未检测到 bash，CodeBuddy hooks 需要 Git Bash
-    echo       请安装 Git for Windows: https://git-scm.com
+powershell -NoProfile -WindowStyle Hidden -File "%SCRIPT_DIR%\merge-hooks.ps1" ^
+    -TemplatePath "%TEMPLATE%" ^
+    -OutputPath "%OUTPUT%" ^
+    -SignalLightDir "%SCRIPT_DIR%" ^
+    -ProjectName "%PROJECT_NAME%" > "%TEMP%\signal-light-install.tmp" 2>&1
+set "MERGE_EXIT=%ERRORLEVEL%"
+
+if %MERGE_EXIT% neq 0 (
+    echo 错误: hooks 合并失败
+    type "%TEMP%\signal-light-install.tmp"
+    pause
+    exit /b 1
 )
 
+:: 解析输出
+findstr /c:"SIGNALLIGHT_ALREADY_INSTALLED" "%TEMP%\signal-light-install.tmp" >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    echo   OK SignalLight 已安装（之前已配置，hooks 已更新）
+) else (
+    for /f "tokens=*" %%L in ('type "%TEMP%\signal-light-install.tmp" ^| findstr /r "^  "') do (
+        call :print_line "%%L"
+    )
+)
+del "%TEMP%\signal-light-install.tmp" 2>nul
+goto :end
+
+:print_line
+set "line=%~1"
+if "%line:~2,1%"=="+" echo   + %line:~4%
+if "%line:~2,1%"=="~" echo   ~ %line:~4%
+goto :eof
+
+:end
 echo.
 echo ========================================
 echo   安装完成！
 echo ========================================
 echo.
 echo 下一步:
+echo   打开项目的 CodeBuddy 终端，灯自动出现
 echo.
-echo   1. 打开项目的 CodeBuddy 终端
-echo   2. 或者重启 CodeBuddy，灯会自动出现
-echo.
-echo 如需为更多项目安装，重复运行:
+echo 如需为更多项目安装:
 echo   install.bat ^<项目路径^>
 echo.
 pause

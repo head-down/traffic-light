@@ -6,10 +6,8 @@
 # 示例:
 #   bash install.sh /d/DevelopTools/my-project
 #
-# 脚本会自动:
-#   1. 提取项目名作为标识
-#   2. 复制 hooks 配置到项目的 .codebuddy/settings.local.json
-#   3. 替换 TRAFFIC_LIGHT_DIR 为当前目录路径
+# 智能合并：已有 settings.local.json 时只追加 SignalLight hooks，
+# 保留用户已有的环境变量、权限、其他 hooks 等配置。
 # ============================================================
 set -euo pipefail
 
@@ -29,7 +27,6 @@ TARGET_PROJECT=""
 if [ $# -ge 1 ]; then
     TARGET_PROJECT="$1"
 else
-    # 尝试自动检测：当前 CodeBuddy 项目
     if [ -n "${CODEBUDDY_PROJECT_DIR:-}" ]; then
         TARGET_PROJECT="$CODEBUDDY_PROJECT_DIR"
         echo -e "  检测到 CodeBuddy 项目: ${YELLOW}$TARGET_PROJECT${NC}"
@@ -43,14 +40,13 @@ else
     fi
 fi
 
-# 规范化路径
 TARGET_PROJECT="$(cd "$TARGET_PROJECT" 2>/dev/null && pwd || echo "")"
 if [ -z "$TARGET_PROJECT" ]; then
     echo -e "${RED}错误: 项目目录不存在${NC}"
     exit 1
 fi
 
-# ---- 获取当前脚本目录（SignalLight 安装目录） ----
+# ---- 获取当前脚本目录 ----
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_NAME="$(basename "$TARGET_PROJECT")"
 
@@ -66,56 +62,40 @@ if [ ! -f "$SCRIPT_DIR/traffic_light.exe" ] && [ ! -f "$SCRIPT_DIR/traffic_light
     exit 1
 fi
 
-if [ ! -f "$SCRIPT_DIR/.codebuddy-hooks.json" ]; then
-    echo -e "${RED}错误: 找不到 .codebuddy-hooks.json 模板文件${NC}"
+# ---- PowerShell 路径转换 ----
+WIN_SCRIPT_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
+TEMPLATE="$WIN_SCRIPT_DIR/.codebuddy-hooks.json"
+OUTPUT="${TARGET_PROJECT:1:1}:${TARGET_PROJECT:2}\\.codebuddy\\settings.local.json"
+
+# ---- 调用 merge-hooks.ps1 智能合并 ----
+echo "  正在合并 hooks 配置..."
+echo ""
+
+RESULT=$(powershell -NoProfile -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/merge-hooks.ps1" \
+    -TemplatePath "$TEMPLATE" \
+    -OutputPath "$OUTPUT" \
+    -SignalLightDir "$WIN_SCRIPT_DIR" \
+    -ProjectName "$PROJECT_NAME" 2>&1)
+MERGE_EXIT=$?
+
+if [ $MERGE_EXIT -ne 0 ]; then
+    echo -e "${RED}错误: hooks 合并失败${NC}"
+    echo "$RESULT"
     exit 1
 fi
 
-# ---- 创建 .codebuddy 目录 ----
-HOOKS_DIR="$TARGET_PROJECT/.codebuddy"
-if [ ! -d "$HOOKS_DIR" ]; then
-    mkdir -p "$HOOKS_DIR"
-    echo -e "  ${GREEN}+${NC} 创建 $HOOKS_DIR"
-fi
-
-# ---- Windows 路径：转为 Git Bash 可用的 Unix 格式 ----
-WIN_PATH="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
-WIN_PATH="${WIN_PATH//\//\\\\}"  # 转义反斜杠用于 JSON
-
-# ---- 生成 settings.local.json ----
-OUTPUT_FILE="$HOOKS_DIR/settings.local.json"
-
-if [ -f "$OUTPUT_FILE" ]; then
-    echo -e "  ${YELLOW}!${NC} $OUTPUT_FILE 已存在"
-    echo ""
-    read -p "  是否覆盖? [y/N] " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}  已跳过。如需重新安装请删除该文件后重试。${NC}"
-        exit 0
-    fi
-    # 备份旧文件
-    cp "$OUTPUT_FILE" "$OUTPUT_FILE.bak"
-    echo -e "  ${YELLOW}  已备份旧文件到 $OUTPUT_FILE.bak${NC}"
-fi
-
-# 使用 sed 替换占位符
-# TRAFFIC_LIGHT_DIR -> SignalLight 目录的 Unix 路径（用于 bash 调用）
-UNIX_PATH="${SCRIPT_DIR}"
-# <YOUR_PROJECT> -> 项目目录名
-sed -e "s|TRAFFIC_LIGHT_DIR|$UNIX_PATH|g" \
-    -e "s|<YOUR_PROJECT>|$PROJECT_NAME|g" \
-    "$SCRIPT_DIR/.codebuddy-hooks.json" > "$OUTPUT_FILE"
-
-echo -e "  ${GREEN}+${NC} 写入 $OUTPUT_FILE"
-echo ""
-
-# ---- 检查 bash 是否可用 ----
-if command -v bash &> /dev/null; then
-    echo -e "  ${GREEN}OK${NC} bash 可用"
+# 解析输出
+if echo "$RESULT" | grep -q "SIGNALLIGHT_ALREADY_INSTALLED"; then
+    echo -e "${GREEN}  OK${NC} SignalLight 已安装（之前已配置，hooks 已更新）"
+elif echo "$RESULT" | grep -q "SIGNALLIGHT_INSTALLED"; then
+    echo "$RESULT" | grep -E "^  " | while read -r line; do
+        case "$line" in
+            *"+"*) echo -e "  ${GREEN}+${NC}${line#*+}" ;;
+            *"~"*) echo -e "  ${YELLOW}~${NC}${line#*~}" ;;
+        esac
+    done
 else
-    echo -e "  ${RED}注意:${NC} 未检测到 bash，CodeBuddy hooks 需要 Git Bash"
-    echo "        请安装 Git for Windows: https://git-scm.com"
+    echo -e "${YELLOW}  !${NC} 解析安装结果失败"
 fi
 
 echo ""
@@ -124,12 +104,8 @@ echo -e "${GREEN}║         安装完成！                       ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo "  下一步:"
+echo "    打开项目的 CodeBuddy 终端，灯自动出现"
 echo ""
-echo "  1. 打开项目的 CodeBuddy 终端"
-echo "     cd $TARGET_PROJECT"
-echo ""
-echo "  2. 或者重启 CodeBuddy，灯会自动出现"
-echo ""
-echo "  如需为更多项目安装，重复运行:"
+echo "  如需为更多项目安装:"
 echo "    bash $SCRIPT_DIR/install.sh <项目路径>"
 echo ""
