@@ -33,17 +33,22 @@ SignalLight（红绿灯）是一个 Windows 桌面悬浮窗，通过三色霓虹
 打开解压后的 `SignalLight` 文件夹，**双击 `install.bat`** 或终端运行：
 
 ```bash
+# 全局安装（推荐）：一次配置，所有 CodeBuddy 项目自动亮灯
+bash install.sh --global
+
+# 或项目级安装：仅指定项目亮灯
 bash install.sh <你的CodeBuddy项目路径>
 ```
 
 脚本会自动：
-1. 在项目下创建 `.codebuddy/settings.local.json`
-2. 填入正确的路径和项目名称
-3. 覆盖安装时有确认提示，旧文件自动备份
+1. **全局模式**：合并 hooks 到 `~/.codebuddy/settings.json`
+2. **项目级模式**：在项目下创建 `.codebuddy/settings.local.json`
+3. 智能合并：保留用户已有的环境变量、其他 hooks 配置，只追加 SignalLight 相关项
+4. 命令级去重：重复安装不会产生双重执行的 hooks
 
 ### 第三步：打开 CodeBuddy
 
-打开对应项目的 CodeBuddy 终端，灯自动出现在屏幕右下角。
+打开任意 CodeBuddy 终端（全局安装时任意项目均可），灯自动出现在屏幕右下角。
 
 ## 工作原理
 
@@ -71,7 +76,7 @@ bash install.sh <你的CodeBuddy项目路径>
 
 ### Q: 能同时监控多个项目吗？
 
-可以。每个项目安装一遍即可，不同项目的灯独立运行，互不影响。
+可以。**推荐使用全局安装**（`bash install.sh --global`），所有 CodeBuddy 项目自动亮灯，不同项目的灯独立运行互不影响。也可以对每个项目单独运行 `bash install.sh <项目路径>`。
 
 ### Q: 需要一直开着终端吗？
 
@@ -79,7 +84,10 @@ bash install.sh <你的CodeBuddy项目路径>
 
 ### Q: 怎么卸载？
 
-删除项目下的 `.codebuddy/settings.local.json` 即可。SignalLight 目录直接删除，无残留。
+- **全局安装**：编辑 `~/.codebuddy/settings.json`，删除 hooks 中 SignalLight 相关配置
+- **项目级安装**：删除项目下的 `.codebuddy/settings.local.json`
+
+SignalLight 目录可直接删除，无残留。
 
 ## 从源码运行
 
@@ -91,7 +99,8 @@ cd traffic-light
 pip install -r requirements.txt
 
 # 配置 hooks
-bash install.sh <项目路径>
+bash install.sh --global        # 全局安装（推荐）
+# 或 bash install.sh <项目路径>  # 项目级安装
 
 # 手动启动（不用 hooks 自动启动时）
 bash bind.sh --project <项目名>
