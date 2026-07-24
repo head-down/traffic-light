@@ -4,8 +4,6 @@
 # ============================================================
 export LC_ALL=C.UTF-8
 
-LOG_FILE="/d/DevelopTools/mine/traffic-light/.traffic-light-states/auto-bind.log"
-
 # Extract project name
 if [ -n "${CODEBUDDY_PROJECT_DIR:-}" ]; then
     PROJECT=$(basename "$CODEBUDDY_PROJECT_DIR")
@@ -15,6 +13,7 @@ fi
 [ -z "$PROJECT" ] && PROJECT="unknown"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$SCRIPT_DIR/.traffic-light-states/auto-bind.log"
 # Windows 路径转换（PowerShell 不能解析 /d/... Unix 风格路径）
 WIN_SCRIPT_DIR="${SCRIPT_DIR:1:1}:${SCRIPT_DIR:2}"
 PID_FILE="$SCRIPT_DIR/.traffic-light-states/$PROJECT.pid"

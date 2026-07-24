@@ -38,7 +38,13 @@ _cbpid_file() {
     echo "$STATE_DIR/$proj.cbpid"
 }
 
-# 获取 CodeBuddy 进程 PID（纯 bash，无 python.exe 调用）
+# 查找 pythonw.exe（从 PATH 自动检测而非硬编码路径）
+_find_pythonw() {
+    powershell -NoProfile -Command "
+        \$pythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
+        if (\$pythonw) { \$pythonw } else { '' }
+    " 2>/dev/null | tr -d '\r'
+}
 # PowerShell 过滤 node.exe 命令行含 codebuddy，排除已声明的 PID
 _get_codebuddy_pid() {
     local proj=$(_get_project_name)
@@ -104,9 +110,16 @@ _traffic_light_daemon() {
         rm -f "$cbpid_file" 2>/dev/null
     fi
 
+    # 查找 pythonw.exe（从 PATH 自动检测）
+    local pythonw_path=$(_find_pythonw)
+    if [ -z "$pythonw_path" ]; then
+        echo "[SignalLight] pythonw.exe not found in PATH — install Python first"
+        return 1
+    fi
+
     # 启动守护进程
     # PowerShell Start-Process + pythonw.exe，-WindowStyle Hidden 彻底消除黑窗
-    powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath 'D:\\software\\python\\pythonw.exe' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
+    powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '$pythonw_path' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
     local bg_pid=$!
     sleep 4
 

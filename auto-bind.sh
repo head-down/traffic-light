@@ -4,8 +4,6 @@
 # ============================================================
 export LC_ALL=C.UTF-8
 
-LOG_FILE="/d/DevelopTools/mine/traffic-light/.traffic-light-states/auto-bind.log"
-
 # Extract project name from CODEBUDDY_PROJECT_DIR or PWD
 if [ -n "${CODEBUDDY_PROJECT_DIR:-}" ]; then
     PROJECT=$(basename "$CODEBUDDY_PROJECT_DIR")
@@ -14,10 +12,12 @@ else
 fi
 [ -z "$PROJECT" ] && PROJECT="unknown"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$SCRIPT_DIR/.traffic-light-states/auto-bind.log"
+
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
 echo "$(date '+%Y-%m-%d %H:%M:%S') SessionStart PROJECT=$PROJECT PWD=$PWD" >> "$LOG_FILE"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.traffic-light-states/$PROJECT.pid"
 
 # ---- Start daemon (cleanup handled by bind.sh's PID alive check + stop-daemon.ps1) ----
