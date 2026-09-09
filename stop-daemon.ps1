@@ -8,7 +8,8 @@ param(
 # 转义项目名中的正则元字符（如 . - _），避免 mine.v2 误匹配 mineXv2
 $projectPattern = [regex]::Escape($Project)
 
-Get-Process -Name python* -ErrorAction SilentlyContinue |
+# pythonw 源码版 + traffic_light.exe 发布版都匹配
+Get-Process -Name python*,traffic_light -ErrorAction SilentlyContinue |
 Where-Object {
     try {
         $cmdline = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)").CommandLine

@@ -49,11 +49,14 @@ _find_pythonw() {
 _get_codebuddy_pid() {
     local proj=$(_get_project_name)
 
-    # PowerShell 获取所有 CodeBuddy node.exe PID（降序）
+    # PowerShell 获取所有 CodeBuddy 主进程 node.exe PID（按创建时间降序）
+    # 排除 windows-child-process-containment launcher —— 它是每个 hook/工具
+    # 任务的短命代理进程（命令行含 codebuddy 会被误匹配），任务结束即退出，
+    # 若被选为心跳对象会导致 daemon 误判 CodeBuddy 已退出而自杀
     local cb_pids=$(powershell -NoProfile -WindowStyle Hidden -Command "
         Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |
-        Where-Object { \$_.CommandLine -match 'codebuddy' } |
-        Sort-Object -Property ProcessId -Descending |
+        Where-Object { \$_.CommandLine -match 'codebuddy' -and \$_.CommandLine -notmatch 'windows-child-process-containment' } |
+        Sort-Object -Property CreationDate -Descending |
         ForEach-Object { Write-Output \$_.ProcessId }
     " 2>/dev/null | tr -d '\r')
     [ -z "$cb_pids" ] && return 1
@@ -87,9 +90,10 @@ _traffic_light_daemon() {
     local WIN_STATE_DIR="${STATE_DIR:1:1}:${STATE_DIR:2}"
 
     # /clear 防护 + 存活检查：PID 文件存在且进程存活 → 跳过重启
+    # （tasklist 判活，避免依赖 powershell；进程死了则清理残留 PID 文件）
     if [ -f "$pid_file" ]; then
         local old_pid=$(cat "$pid_file" 2>/dev/null)
-        if [ -n "$old_pid" ] && powershell -NoProfile -Command "Get-Process -Id $old_pid" > /dev/null 2>&1; then
+        if [ -n "$old_pid" ] && MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $old_pid" 2>/dev/null | grep -q "$old_pid"; then
             echo "[SignalLight] daemon already running (PID=$old_pid), skipping restart"
             return 0
         fi
@@ -111,10 +115,15 @@ _traffic_light_daemon() {
     fi
 
     # 优先使用同目录下的 EXE 发布版，其次回退到 Python 源码
+    # 启动方式：schtasks 一次性计划任务（Task Scheduler 服务启动，逃逸
+    # CodeBuddy 的 Windows Job Object 进程管控 —— kill-on-close 会在
+    # hook/工具任务结束时杀掉整棵子进程树，powershell Start-Process 无法逃逸）
+    local task_name="traffic-light-$proj"
+    local task_cmd=""
     local exe_path="$WIN_SCRIPT_DIR/traffic_light.exe"
     if [ -f "$SCRIPT_DIR/traffic_light.exe" ]; then
-        # EXE 发布版：直接启动，无需 Python
-        powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '$exe_path' -ArgumentList '--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
+        # EXE 发布版
+        task_cmd="'$exe_path' --project $proj"
     else
         # Python 源码版：查找 pythonw.exe 启动
         local pythonw_path=$(_find_pythonw)
@@ -122,16 +131,24 @@ _traffic_light_daemon() {
             echo "[SignalLight] pythonw.exe not found in PATH — install Python first"
             return 1
         fi
-        powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '$pythonw_path' -ArgumentList 'traffic_light.py','--project','$proj' -WorkingDirectory '$WIN_SCRIPT_DIR' -WindowStyle Hidden -RedirectStandardOutput '$WIN_STATE_DIR\\daemon.log'" &
+        task_cmd="'$pythonw_path' '$WIN_SCRIPT_DIR\\traffic_light.py' --project $proj"
     fi
+    MSYS_NO_PATHCONV=1 schtasks /Create /TN "$task_name" /TR "$task_cmd" /SC ONCE /ST 23:59 /F > /dev/null 2>&1
+    MSYS_NO_PATHCONV=1 schtasks /Run /TN "$task_name" > /dev/null 2>&1
     sleep 4
 
     # 读 Python 写入的 PID（os.getpid() 写入，比 bash $! 准确）
-    # PID 文件存在 = 守护进程已启动（main() 在进 Qt 事件循环前写入）
+    # PID 文件存在 + 进程存活 = 启动成功（防止"启动后被外力杀死"的误报）
     if [ -f "$pid_file" ]; then
         local daemon_pid=$(cat "$pid_file" 2>/dev/null)
-        echo "[SignalLight] daemon started $PROJECT_ARG (PID=$daemon_pid)"
-        return 0
+        if [ -n "$daemon_pid" ] && MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $daemon_pid" 2>/dev/null | grep -q "$daemon_pid"; then
+            echo "[SignalLight] daemon started $PROJECT_ARG (PID=$daemon_pid)"
+            return 0
+        fi
+        # PID 文件在但进程已死（EXE 崩溃 / 被进程管控杀死）
+        echo "[SignalLight] start failed (PID $daemon_pid not alive after launch, check daemon.log)"
+        rm -f "$pid_file" 2>/dev/null
+        return 1
     fi
 
     # PID 文件不存在 = daemon 启动失败（EXE 崩溃 / _internal 缺失 / Python 报错）
@@ -161,6 +178,9 @@ _traffic_light_stop() {
     # 方法3：进程名兜底（Python 脚本版残留）
     local cbpid_file=$(_cbpid_file)
     rm -f "$cbpid_file" 2>/dev/null
+
+    # 方法4：清理 schtasks 启动任务（防止残留计划任务）
+    MSYS_NO_PATHCONV=1 schtasks /Delete /TN "traffic-light-$proj" /F > /dev/null 2>&1
 }
 
 # ---- 更新状态 ----

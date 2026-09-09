@@ -99,7 +99,8 @@ class LifecycleManager:
     def _redirect_logs(self):
         """stdout/stderr → daemon.log（不依赖 bind.sh 的外部重定向）"""
         log_path = os.path.join(self._pid_dir, "daemon.log")
-        log_fd = open(log_path, "a", buffering=1)
+        # 强制 UTF-8：终端标题含 spinner 盲文字符（⠴ 等），默认 GBK 会报编码错
+        log_fd = open(log_path, "a", buffering=1, encoding="utf-8")
         sys.stdout = log_fd
         sys.stderr = log_fd
         print(
