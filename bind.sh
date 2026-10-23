@@ -53,9 +53,11 @@ _get_codebuddy_pid() {
     # 排除 windows-child-process-containment launcher —— 它是每个 hook/工具
     # 任务的短命代理进程（命令行含 codebuddy 会被误匹配），任务结束即退出，
     # 若被选为心跳对象会导致 daemon 误判 CodeBuddy 已退出而自杀
+    # 同理排除 node-pty 的 conpty_console_list_agent —— hook 走 PTY 时拉起的
+    # 短命子进程，路径含 codebuddy-code 也会被误匹配（2026-10-23 实例）
     local cb_pids=$(powershell -NoProfile -WindowStyle Hidden -Command "
         Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |
-        Where-Object { \$_.CommandLine -match 'codebuddy' -and \$_.CommandLine -notmatch 'windows-child-process-containment' } |
+        Where-Object { \$_.CommandLine -match 'codebuddy' -and \$_.CommandLine -notmatch 'windows-child-process-containment|conpty|node-pty' } |
         Sort-Object -Property CreationDate -Descending |
         ForEach-Object { Write-Output \$_.ProcessId }
     " 2>/dev/null | tr -d '\r')
@@ -134,6 +136,16 @@ _traffic_light_daemon() {
         task_cmd="'$pythonw_path' '$WIN_SCRIPT_DIR\\traffic_light.py' --project $proj"
     fi
     MSYS_NO_PATHCONV=1 schtasks /Create /TN "$task_name" /TR "$task_cmd" /SC ONCE /ST 23:59 /F > /dev/null 2>&1
+    # 关闭"电池供电时不启动/停止任务"：笔记本用电池时 schtasks 任务会被静默跳过
+    # （schtasks CLI 无对应开关，需用 PowerShell 改写任务配置）
+    powershell -NoProfile -Command "
+        \$t = Get-ScheduledTask -TaskName '$task_name' -ErrorAction SilentlyContinue
+        if (\$t) {
+            \$t.Settings.DisallowStartIfOnBatteries = \$false
+            \$t.Settings.StopIfGoingOnBatteries = \$false
+            Set-ScheduledTask -TaskName '$task_name' -Settings \$t.Settings | Out-Null
+        }
+    " 2>/dev/null
     MSYS_NO_PATHCONV=1 schtasks /Run /TN "$task_name" > /dev/null 2>&1
     sleep 4
 
