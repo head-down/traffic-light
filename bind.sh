@@ -45,41 +45,30 @@ _find_pythonw() {
         if (\$pythonw) { \$pythonw } else { '' }
     " 2>/dev/null | tr -d '\r'
 }
-# PowerShell 过滤 node.exe 命令行含 codebuddy，排除已声明的 PID
+# 解析本会话 CodeBuddy 主进程 PID。
+#
+# 历史：这里曾用「node.exe + 命令行含 codebuddy + 创建时间最新」猜主进程，
+# 已连续三次误判（containment launcher / node-pty agent / 一次性 CLI 子进程）。
+# 一次性调用（codebuddy -p "..."）与主进程命令行同构、创建时间更晚，
+# 一旦被选中，daemon 会在 10 秒内误判主进程退出而自杀。
+#
+# 现在只认一个确定性锚点：CODEBUDDY_SERVICE_PROXY_URL 的端口 → 监听该端口的进程。
+# 每个窗口一个独立端口，与进程名、创建时间、进程数量都无关。
+# 拿不到就返回非 0：宁可不启心跳（灯靠 state TTL 和 SessionEnd 收），
+# 也不要一个会误判的心跳。
 _get_codebuddy_pid() {
-    local proj=$(_get_project_name)
+    local port
+    port=$(printf '%s' "${CODEBUDDY_SERVICE_PROXY_URL:-}" | sed -n 's#.*:\([0-9][0-9]*\)/.*#\1#p')
+    [ -z "$port" ] && return 1
 
-    # PowerShell 获取所有 CodeBuddy 主进程 node.exe PID（按创建时间降序）
-    # 排除 windows-child-process-containment launcher —— 它是每个 hook/工具
-    # 任务的短命代理进程（命令行含 codebuddy 会被误匹配），任务结束即退出，
-    # 若被选为心跳对象会导致 daemon 误判 CodeBuddy 已退出而自杀
-    # 同理排除 node-pty 的 conpty_console_list_agent —— hook 走 PTY 时拉起的
-    # 短命子进程，路径含 codebuddy-code 也会被误匹配（2026-10-23 实例）
-    local cb_pids=$(powershell -NoProfile -WindowStyle Hidden -Command "
-        Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |
-        Where-Object { \$_.CommandLine -match 'codebuddy' -and \$_.CommandLine -notmatch 'windows-child-process-containment|conpty|node-pty' } |
-        Sort-Object -Property CreationDate -Descending |
-        ForEach-Object { Write-Output \$_.ProcessId }
-    " 2>/dev/null | tr -d '\r')
-    [ -z "$cb_pids" ] && return 1
+    local pid
+    pid=$(MSYS_NO_PATHCONV=1 netstat -ano 2>/dev/null \
+        | grep -E "127\.0\.0\.1:${port}[[:space:]]+.*LISTENING" \
+        | awk '{print $NF}' | head -1)
+    [ -z "$pid" ] && return 1
 
-    # 读取已声明 PID（排除自己项目）
-    local claimed=""
-    for f in "$STATE_DIR"/*.cbpid; do
-        [ "$f" = "$(_cbpid_file)" ] && continue
-        local p=$(cat "$f" 2>/dev/null | tr -d '\r\n')
-        [ -n "$p" ] && claimed="$claimed $p"
-    done
-
-    # 选第一个未声明 PID
-    for pid in $cb_pids; do
-        local is_claimed=0
-        for c in $claimed; do
-            [ "$c" = "$pid" ] && { is_claimed=1; break; }
-        done
-        [ $is_claimed -eq 0 ] && { echo "$pid"; return 0; }
-    done
-    return 1
+    echo "$pid"
+    return 0
 }
 
 # ---- 启动守护进程 ----
