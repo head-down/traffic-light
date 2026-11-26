@@ -13,7 +13,17 @@ import os
 import time
 from dataclasses import dataclass
 
-from core.state_manager import AGGREGATE_PRIORITY, STATE_TTL_SECONDS
+# 聚合优先级：等待确认 > 失败 > 思考 > 运行 > 成功 > 空闲
+AGGREGATE_PRIORITY = ["waiting", "failure", "thinking", "running", "success", "idle"]
+# 每类状态的 TTL（秒）：超时只在聚合时回落 idle，不淘汰会话本身
+STATE_TTL_SECONDS = {
+    "thinking": 600,
+    "running": 90,
+    "waiting": 600,
+    "success": 8,
+    "failure": 30,
+    "idle": float("inf"),
+}
 
 # 状态集合：原六态 + ended（SessionEnd 只置 ended，不删文件）
 VALID_STATES = set(AGGREGATE_PRIORITY) | {"ended"}
@@ -95,7 +105,11 @@ def _to_bool(value):
 
 
 def _parse_bind(path):
-    """解析单个 .bind 文件；缺 pid 或 pid 非正整数视为损坏"""
+    """解析单个 .bind 文件；缺 pid 或 pid 非数字视为损坏。
+
+    pid=0 是合法状态：解析器认出了窗口却没认定进程（身份未知）。这条
+    绑定仍属于那个窗口，只是渲染成 idle、跳过进程校验。
+    """
     fields = {}
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -106,8 +120,10 @@ def _parse_bind(path):
             fields[key.strip()] = value.strip()
 
     pid = _to_int(fields.get("pid"))
-    if pid is None or pid <= 0:
+    if pid is None:
         raise ValueError(f"invalid bind pid: {fields.get('pid')!r}")
+    if pid < 0:
+        pid = 0
 
     session_id = fields.get("session_id", "")
     return Bind(
@@ -223,39 +239,41 @@ class SessionView:
     def snapshot(self) -> WindowView:
         now = self._resolve_now()
         states = self._sources.read_states()
-        binds_by_pid = self._latest_bind_per_pid(self._sources.read_binds())
+        binds = self._latest_binds(self._sources.read_binds())
 
-        sessions = []
-        for pid, bind in binds_by_pid.items():
+        entries = []
+        for bind in binds:
             if bind.degraded != self._degraded:
                 continue
             if not self._degraded and (not self._hwnd or bind.hwnd != self._hwnd):
                 continue
 
-            entry = states.get(pid)
-            creation_ft = bind.creation_ft or (
-                entry.creation_ft if entry is not None else "")
-            if not self._checker(pid, creation_ft or None):
-                continue
+            known_pid = bind.pid > 0
+            entry = states.get(bind.pid) if known_pid else None
+            if known_pid:
+                creation_ft = bind.creation_ft or (
+                    entry.creation_ft if entry is not None else "")
+                if not self._checker(bind.pid, creation_ft or None):
+                    continue
 
-            sessions.append(SessionInfo(
-                pid=pid,
+            entries.append((bind, SessionInfo(
+                pid=bind.pid,
                 state=self._resolve_state(entry, now),
                 project=bind.project,
                 session_id=bind.session_id,
-            ))
+            )))
 
-        if not sessions:
+        if not entries:
             return WindowView("idle", "", 0, self._degraded, [])
 
-        sessions.sort(key=lambda s: (
-            _PRIORITY_INDEX.get(s.state, len(_PRIORITY_INDEX)),
-            -binds_by_pid[s.pid].updated,
-            s.pid,
+        entries.sort(key=lambda pair: (
+            _PRIORITY_INDEX.get(pair[1].state, len(_PRIORITY_INDEX)),
+            -pair[0].updated,
+            pair[0].pid,
         ))
-        top = sessions[0]
-        return WindowView(top.state, top.project, len(sessions),
-                          self._degraded, sessions)
+        _, top = entries[0]
+        return WindowView(top.state, top.project, len(entries),
+                          self._degraded, [info for _, info in entries])
 
     # ---- 内部 ----
 
@@ -267,14 +285,16 @@ class SessionView:
         return self._now
 
     @staticmethod
-    def _latest_bind_per_pid(binds) -> dict:
+    def _latest_binds(binds) -> list:
+        """同 pid 取 updated 最新的一条；身份未知（pid=0）按 session_id 分辨。"""
         latest = {}
         for bind in binds:
-            current = latest.get(bind.pid)
+            key = bind.pid if bind.pid > 0 else "session:" + bind.session_id
+            current = latest.get(key)
             if current is None or (bind.updated, bind.session_id) >= (
                     current.updated, current.session_id):
-                latest[bind.pid] = bind
-        return latest
+                latest[key] = bind
+        return list(latest.values())
 
     @staticmethod
     def _resolve_state(entry, now):

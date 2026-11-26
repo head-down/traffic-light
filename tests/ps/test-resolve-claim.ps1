@@ -260,6 +260,8 @@ function Invoke-Tests {
     Set-Content -LiteralPath (Join-Path $state '777.bind') -Value @('session_id=reborn', 'pid=2000', 'creation_ft=111', 'hwnd=111') -Encoding UTF8
 
     Set-Content -LiteralPath (Join-Path $state '12345.state') -Value @('thinking', 'D:/work/proj', '900') -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $state '5000.state') -Value @('thinking', 'D:/work/proj', '1000') -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $state '2000.state') -Value @('running', 'D:/work/proj', '111') -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $state 'legacy.state') -Value @('idle', 'D:/work/proj') -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $state 'proj.pid') -Value '999' -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $state 'proj.cbpid') -Value '999' -Encoding UTF8
@@ -298,7 +300,9 @@ function Invoke-Tests {
     Assert-True 'orphan anchor without a task is collected' ($acts -contains 'file:w444.win') $joined
 
     Assert-True 'live bind is kept' (-not ($acts -contains 'file:555.bind')) $joined
-    Assert-True 'numeric state key is kept' (-not ($acts -contains 'file:12345.state')) $joined
+    Assert-True 'state of a dead pid is collected' ($acts -contains 'file:12345.state') $joined
+    Assert-True 'state of a reused pid is collected' ($acts -contains 'file:2000.state') $joined
+    Assert-True 'live state with a matching creation_ft is kept' (-not ($acts -contains 'file:5000.state')) $joined
     Assert-True 'fresh anchor is kept' (-not ($acts -contains 'file:w111.win')) $joined
     Assert-True 'unrelated file is kept' (-not ($acts -contains 'file:daemon.log')) $joined
 
@@ -307,10 +311,10 @@ function Invoke-Tests {
 
     $r = Invoke-Resolver @('-Snapshot', $snap, '-StateDir', $state, '-GcOnly', '-TasksFile', $tasksFile)
     Assert-Eq 'apply exit code' $r.ExitCode 0
-    foreach ($gone in @('proj.pid', 'proj.cbpid', 'proj.hwnd', 'legacy.state', '666.bind', '777.bind', 'w222.win', 'w444.win')) {
+    foreach ($gone in @('proj.pid', 'proj.cbpid', 'proj.hwnd', 'legacy.state', '12345.state', '2000.state', '666.bind', '777.bind', 'w222.win', 'w444.win')) {
         Assert-True ('apply removes ' + $gone) (-not (Test-Path -LiteralPath (Join-Path $state $gone)))
     }
-    foreach ($kept in @('555.bind', '12345.state', 'w111.win', 'w555.win', 'daemon.log')) {
+    foreach ($kept in @('555.bind', '5000.state', 'w111.win', 'w555.win', 'daemon.log')) {
         Assert-True ('apply keeps ' + $kept) (Test-Path -LiteralPath (Join-Path $state $kept))
     }
 

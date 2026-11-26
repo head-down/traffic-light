@@ -56,6 +56,11 @@ _json_str() {
 session_id="$(_json_str session_id)"
 [ -z "$session_id" ] && session_id="${CODEBUDDY_SESSION_ID:-}"
 [ -z "$session_id" ] && exit 0
+# session_id is part of a filename: anything outside [A-Za-z0-9._-] could
+# escape the state directory, so it is silently dropped
+case "$session_id" in
+    *[!A-Za-z0-9._-]*) exit 0 ;;
+esac
 
 payload_cwd="$(_json_str cwd)"
 [ -z "$payload_cwd" ] && payload_cwd="${CODEBUDDY_PROJECT_DIR:-$PWD}"
@@ -126,11 +131,15 @@ _anchor_stale() {
 }
 
 _run_resolve() {
+    # GC 只在安装与 SessionStart 跑；prompt 的 TTL/锚自愈重解析不得扫别人的状态目录
+    local extra=()
+    [ "$event" = "prompt" ] && extra+=("-NoGc")
     "$ps_bin" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden \
         -File "$(_win_path "$resolve_ps1")" \
         -SessionId "$session_id" \
         -Cwd "$(_win_path "$payload_cwd")" \
         -StateDir "$(_win_path "$state_dir")" \
+        ${extra[@]+"${extra[@]}"} \
         >/dev/null 2>&1
 }
 

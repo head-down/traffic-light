@@ -205,13 +205,17 @@ if ($binds.Count -eq 0) {
         $bindCount++
         $fields = Read-Fields $item.FullName
         $procId = ConvertTo-Int $fields['pid']
-        if ($procId -le 0) {
-            Set-Row 'bind' $item.Name 'FAIL' 'pid missing or not a positive integer (corrupt bind)'
-            continue
-        }
         $hwnd = if ($fields['hwnd']) { [string]$fields['hwnd'] } else { '0' }
         $project = [string]$fields['project']
         $degraded = [string]$fields['degraded']
+        if ($procId -le 0) {
+            # identity unknown is valid when the bind still names a lamp
+            $hasTarget = ($hwnd -match '^\d+$' -and [int64]$hwnd -gt 0) -or $degraded -eq '1'
+            $detail = 'pid unknown hwnd=' + $hwnd + ' project=' + $project + ' degraded=' + $degraded
+            if ($hasTarget) { Set-Row 'bind' $item.Name 'PASS' $detail }
+            else { Set-Row 'bind' $item.Name 'FAIL' 'pid missing and no hwnd/degraded target (corrupt bind)' }
+            continue
+        }
         $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
         if (-not $proc) {
             Set-Row 'bind' $item.Name 'FAIL' ('pid=' + $procId + ' gone -> dead bind (waiting for GC)')

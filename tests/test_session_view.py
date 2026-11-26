@@ -245,6 +245,51 @@ def test_empty_degraded_view_is_idle_and_flagged():
 
 
 # ============================================================
+# 身份未知（pid=0）：hwnd 已知仍归窗，状态按 idle
+# ============================================================
+
+def _unknown(project="ghost", hwnd=123, session_id="ghost-1", degraded=False,
+             updated=NOW):
+    return Bind(session_id=session_id, pid=0, creation_ft="", hwnd=hwnd,
+                project=project, cwd="C:/work", updated=updated,
+                degraded=degraded)
+
+
+def test_pid_zero_bind_with_hwnd_enters_that_window_as_idle():
+    sources = _sources([_unknown(hwnd=123, project="ghost")])
+    snap = _view(sources, hwnd=123).snapshot()
+    assert snap.count == 1
+    assert snap.state == "idle"
+    assert snap.label == "ghost"
+    assert snap.sessions[0].pid == 0
+
+
+def test_pid_zero_bind_does_not_leak_into_another_window():
+    sources = _sources([_unknown(hwnd=123)])
+    assert _view(sources, hwnd=456).snapshot().count == 0
+
+
+def test_pid_zero_degraded_bind_enters_degraded_view():
+    sources = _sources([_unknown(hwnd=0, project="lost", degraded=True)])
+    snap = _view(sources, hwnd=None, degraded=True).snapshot()
+    assert snap.count == 1
+    assert snap.label == "lost"
+    assert snap.state == "idle"
+
+
+def test_pid_zero_binds_are_deduped_by_session_id_not_merged():
+    sources = _sources([
+        _unknown(session_id="a", updated=NOW - 10, project="old-a"),
+        _unknown(session_id="a", updated=NOW, project="new-a"),
+        _unknown(session_id="b", hwnd=123, project="b"),
+    ])
+    snap = _view(sources, hwnd=123, degraded=False).snapshot()
+    assert snap.count == 2
+    assert {s.session_id for s in snap.sessions} == {"a", "b"}
+    assert snap.label == "new-a"
+
+
+# ============================================================
 # FileSystemSources：读真实目录
 # ============================================================
 
@@ -278,6 +323,35 @@ def test_filesystem_sources_read_state_and_bind(tmp_path):
     assert snap.label == "alpha"
     assert snap.count == 1
     assert snap.sessions[0].pid == 4242
+
+
+def test_filesystem_sources_accept_pid_zero_bind(tmp_path):
+    (tmp_path / "ghost.bind").write_text(
+        "\n".join([
+            "session_id=ghost",
+            "pid=0",
+            "creation_ft=",
+            "hwnd=777",
+            "hwnd_owner_pid=0",
+            "hwnd_owner_ft=",
+            "project=ghost-proj",
+            "cwd=C:/work/ghost",
+            f"updated={int(NOW)}",
+            "degraded=0",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    view = SessionView(
+        FileSystemSources(str(tmp_path)),
+        hwnd=777,
+        process_checker=lambda pid, ft: False,
+        now=NOW,
+    )
+    snap = view.snapshot()
+    assert snap.count == 1
+    assert snap.state == "idle"
+    assert snap.label == "ghost-proj"
 
 
 def test_filesystem_sources_skip_malformed_and_old_format(tmp_path):

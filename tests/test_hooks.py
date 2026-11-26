@@ -205,6 +205,7 @@ def test_prompt_reruns_resolver_when_bind_expired(env):
     env.touch_anchor()
     assert env.run("prompt", _payload()).returncode == 0
     assert len(env.calls()) == 1
+    assert "-NoGc" in env.calls()[0]
     assert _lines(env.state_path())[0] == "thinking"
     assert _lines(env.state_path())[2] == PINNED_FT
 
@@ -231,6 +232,7 @@ def test_prompt_reruns_resolver_when_degraded(env):
 def test_prompt_without_bind_resolves_then_writes(env):
     assert env.run("prompt", _payload()).returncode == 0
     assert len(env.calls()) == 1
+    assert "-NoGc" in env.calls()[0]
     assert _lines(env.state_path())[0] == "thinking"
 
 
@@ -274,6 +276,7 @@ def test_end_writes_ended_and_keeps_bind(env):
 def test_session_start_resolves_and_writes_idle(env):
     assert env.run("session-start", _payload()).returncode == 0
     assert len(env.calls()) == 1
+    assert "-NoGc" not in env.calls()[0]
     assert _lines(env.state_path()) == ["idle", PINNED_CWD, PINNED_FT]
 
 
@@ -294,6 +297,14 @@ def test_session_start_without_pid_is_silent(env):
 # ============================================================
 # 通用：session_id 与原子写
 # ============================================================
+
+def test_path_like_session_id_never_resolves_or_writes(env):
+    result = env.run("prompt", _payload(sid="../escape"))
+    assert result.returncode == 0
+    assert env.calls() == []
+    assert list(env.state.glob("*.state")) == []
+    assert not (env.root / "escape.bind").exists()
+
 
 def test_missing_session_id_is_silent(env):
     env.write_bind()

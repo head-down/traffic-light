@@ -1,7 +1,8 @@
 <#
 Traffic Light - session/window resolver (single source of truth for hwnd)
 
-Called by bind.sh at SessionStart and when a session's bind is missing or stale.
+Called by hooks/traffic-light.sh at SessionStart and when a session's bind is
+missing, stale, or still degraded.
 In order:
   1. identify this session's CodeBuddy process - service proxy port first, parent
      chain only as a fallback (pid + creation time, never guessed)
@@ -36,13 +37,13 @@ Design rules (do not simplify away):
 param(
     [string]$SessionId = "",
     [string]$Cwd = "",
-    [string]$Project = "",
     [string]$StateDir = "",
     [string]$Snapshot = "",
     [string]$TasksFile = "",
     [switch]$GcOnly,
     [switch]$DryRun,
-    [switch]$NoSpawn
+    [switch]$NoSpawn,
+    [switch]$NoGc
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -416,18 +417,22 @@ if (-not $cwdNorm) { $cwdNorm = (Get-Location).Path }
 if ($cwdNorm -match '^/([A-Za-z])/(.*)$') { $cwdNorm = $Matches[1].ToUpper() + ':/' + $Matches[2] }
 if (-not $StateDir) { $StateDir = Join-Path $PSScriptRoot '.traffic-light-states' }
 if (-not $SessionId) { $SessionId = "manual-$PID" }
-if (-not $Project) { $Project = Get-ProjectLabel $cwdNorm }
+# project is a label derived from cwd (never a key, never a parameter)
+$Project = Get-ProjectLabel $cwdNorm
 
+# Only a missing window degrades a session. An unresolved pid is "identity
+# unknown", not "no window": the bind still belongs to the window it found.
 $degraded = 0
-if ($hwndDec -eq 0 -or $cbPid -eq 0) { $degraded = 1 }
+if ($hwndDec -eq 0) { $degraded = 1 }
 $bindPath = Join-Path $StateDir ($SessionId + '.bind')
 
 # ---- GC --------------------------------------------------------------------
 
-function Test-BindAlive {
+function Test-ProcIdentity {
+    # Is this pid alive and still the same process? An empty creation_ft means
+    # "unknown", which only proves death when the pid itself is gone.
     param([string]$PidText, [string]$FtText, $Snap, $ByPid)
-    if (-not $PidText -or $PidText -eq '0') { return $false }
-    if ($PidText -notmatch '^\d+$') { return $false }
+    if (-not $PidText -or $PidText -notmatch '^[1-9]\d*$') { return $false }
     $ip = [int]$PidText
     if ($Snap.Injected) {
         if (-not $ByPid.ContainsKey($ip)) { return $false }
@@ -441,6 +446,26 @@ function Test-BindAlive {
         catch { return $false }
     }
     return $true
+}
+
+function Test-BindAlive {
+    param([string]$PidText, [string]$FtText, [string]$HwndText, [string]$DegradedText, $Snap, $ByPid)
+    # An unknown identity cannot be proven dead: keep the bind while it still
+    # names a window or the degraded lamp. No identity and no target = garbage.
+    if (-not $PidText -or $PidText -notmatch '^\d+$' -or [int64]$PidText -le 0) {
+        if ($HwndText -match '^\d+$' -and [int64]$HwndText -gt 0) { return $true }
+        return ($DegradedText -eq '1')
+    }
+    return (Test-ProcIdentity -PidText $PidText -FtText $FtText -Snap $Snap -ByPid $ByPid)
+}
+
+function Get-StateCreationFt {
+    # <pid>.state is three lines: state / cwd / creation_ft. Older two-line
+    # files have no identity evidence, which is tolerated (identity unknown).
+    param([string]$Path)
+    $lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
+    if ($lines.Count -ge 3) { return ([string]$lines[2]).Trim() }
+    return ''
 }
 
 function Read-TaskList {
@@ -513,14 +538,22 @@ function Invoke-Gc {
             }
             if ($n -match '^(.+)\.state$') {
                 $key = $Matches[1]
-                if ($key -match '^\d+$') { continue }
+                if ($key -match '^\d+$') {
+                    # identity-keyed state: dead pid or a reused pid is garbage
+                    $ft = Get-StateCreationFt $f.FullName
+                    if (-not (Test-ProcIdentity -PidText $key -FtText $ft -Snap $Snap -ByPid $ByPid)) {
+                        $actions += ('file:' + $n)
+                        if ($Apply) { Remove-Item -LiteralPath $f.FullName -Force }
+                    }
+                    continue
+                }
                 $actions += ('file:' + $n)
                 if ($Apply) { Remove-Item -LiteralPath $f.FullName -Force }
                 continue
             }
             if ($n -match '\.bind$') {
                 $b = Read-BindFile $f.FullName
-                if (-not (Test-BindAlive -PidText ([string]$b['pid']) -FtText ([string]$b['creation_ft']) -Snap $Snap -ByPid $ByPid)) {
+                if (-not (Test-BindAlive -PidText ([string]$b['pid']) -FtText ([string]$b['creation_ft']) -HwndText ([string]$b['hwnd']) -DegradedText ([string]$b['degraded']) -Snap $Snap -ByPid $ByPid)) {
                     $actions += ('file:' + $n)
                     if ($Apply) { Remove-Item -LiteralPath $f.FullName -Force }
                 }
@@ -693,7 +726,11 @@ if ($canClaim -and ($hwndDec -ne 0 -or $degraded -eq 1)) {
     }
 }
 
-Invoke-Gc -Apply $true -Snap $snap -ByPid $byPid -Dir $StateDir | Out-Null
+# GC belongs to install and SessionStart only; prompt-triggered re-resolves
+# pass -NoGc so they never sweep another session's state directory.
+if (-not $NoGc) {
+    Invoke-Gc -Apply $true -Snap $snap -ByPid $byPid -Dir $StateDir | Out-Null
+}
 
 if ($NoSpawn) {
     [pscustomobject]@{

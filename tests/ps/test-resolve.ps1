@@ -92,7 +92,7 @@ function Invoke-Tests {
     $snap = Join-Path $d 'snap.json'
     Write-Snapshot -Path $snap -SelfPid 5000 -ProxyUrl 'http://127.0.0.1:54894/internal/hooks/session-start' -Listeners @{ '54894' = 6000 } -Procs @(
         @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe -File resolve.ps1'; hwnd = 0 }
-        @{ processId = 4000; parentProcessId = 2000; name = 'bash.exe'; creationFt = '900'; commandLine = '/usr/bin/bash D:/tl/bind.sh'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 2000; name = 'bash.exe'; creationFt = '900'; commandLine = '/usr/bin/bash D:/tl/resolve.ps1'; hwnd = 0 }
         @{ processId = 2000; parentProcessId = 3000; name = 'node.exe'; creationFt = '700'; commandLine = $CbCmd; hwnd = 0 }
         @{ processId = 3000; parentProcessId = 0; name = 'WindowsTerminal.exe'; creationFt = '600'; commandLine = 'WindowsTerminal.exe'; hwnd = 0 }
         @{ processId = 6000; parentProcessId = 0; name = 'node.exe'; creationFt = '800'; commandLine = $CbCmd + ' --second-session'; hwnd = 0 }
@@ -111,7 +111,7 @@ function Invoke-Tests {
     $snap = Join-Path $d 'snap.json'
     Write-Snapshot -Path $snap -SelfPid 5000 -Procs @(
         @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe -File resolve.ps1'; hwnd = 0 }
-        @{ processId = 4000; parentProcessId = 2000; name = 'bash.exe'; creationFt = '900'; commandLine = '/usr/bin/bash D:/tl/bind.sh'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 2000; name = 'bash.exe'; creationFt = '900'; commandLine = '/usr/bin/bash D:/tl/resolve.ps1'; hwnd = 0 }
         @{ processId = 2000; parentProcessId = 3000; name = 'node.exe'; creationFt = '700'; commandLine = $CbCmd; hwnd = 0 }
         @{ processId = 3000; parentProcessId = 0; name = 'WindowsTerminal.exe'; creationFt = '600'; commandLine = 'WindowsTerminal.exe'; hwnd = 0 }
     )
@@ -280,6 +280,25 @@ function Invoke-Tests {
     Assert-Eq 'a neighbouring process cannot replace the identity' $b['pid'] '2000'
     Assert-Eq 'its creation_ft is kept too' $b['creation_ft'] '900'
     Assert-Eq 'but the window follows the new resolution' $b['hwnd'] '888'
+
+    # ---------------------------------------------------------------- F1 ----
+    Write-Output 'F1  a resolved window stays a window even when the pid is unknown'
+    $d = New-Case 'f1'
+    $state = Join-Path $d 'state'
+    $cwd = Join-Path $d 'win-dir'
+    [void](New-Item -ItemType Directory -Path $cwd -Force)
+    $snap = Join-Path $d 'snap.json'
+    Write-Snapshot -Path $snap -SelfPid 5000 -Procs @(
+        @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 0; name = 'WindowsTerminal.exe'; creationFt = '900'; commandLine = 'WindowsTerminal.exe'; hwnd = 424242 }
+    )
+    $r = Invoke-Resolver @('-Snapshot', $snap, '-StateDir', $state, '-SessionId', 'f1', '-Cwd', $cwd)
+    Assert-Eq 'exit code' $r.ExitCode 0
+    $b = Read-Bind (Join-Path $state 'f1.bind')
+    Assert-Eq 'bind survives its own GC' ([bool]($b.Count -gt 0)) $true $r.Text
+    Assert-Eq 'identity stays unknown' $b['pid'] '0'
+    Assert-Eq 'hwnd is kept' $b['hwnd'] '424242'
+    Assert-Eq 'degraded is not flagged without a pid' $b['degraded'] '0'
 }
 
 try {
