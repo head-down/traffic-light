@@ -25,6 +25,13 @@ import os
 import subprocess
 import sys
 
+# hook 入口：GUI 子系统下用 CREATE_NO_WINDOW 起 bash，避免每个事件闪一个黑框。
+# 必须在导入 PyQt 之前处理：hook 不需要 Qt，启动越快越好。
+if len(sys.argv) > 1 and sys.argv[1] == "--hook":
+    from core.hook_launcher import run_hook
+
+    sys.exit(run_hook(sys.argv[2:]))
+
 # 必须在 QApplication 创建前设置 DPI awareness
 # 系统 DPI 缩放 150%，不设置的话 GetWindowRect 返回虚拟化坐标（缩放后的），
 # 导致 SetWindowPos 定位错误

@@ -64,6 +64,7 @@ def test_build_spec_bundles_resolver_and_hooks():
     assert (REPO / "resolve.ps1").is_file()
     assert (REPO / "probe.ps1").is_file()
     assert (REPO / "hooks" / "traffic-light.sh").is_file()
+    assert (REPO / "hooks" / "run-hidden.pyw").is_file()
 
 
 def test_build_spec_bundles_install_entrypoints_for_exe_users():
@@ -137,8 +138,9 @@ def test_hook_template_wires_six_events_to_single_entrypoint():
         ]
         assert len(commands) == 1, (event, commands)
         command = commands[0]
-        assert "TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh " + subcommand in command
-        assert "bash --noprofile --norc" in command
+        # 命令由 merge-hooks 换成无窗口启动器（EXE --hook 或 pythonw run-hidden.pyw），
+        # 模板里只保留占位符 + 事件名
+        assert command == "TRAFFIC_LIGHT_LAUNCH " + subcommand
         assert "<YOUR_PROJECT>" not in command
     assert hooks["Notification"][0]["matcher"] == "permission_prompt"
 
@@ -150,6 +152,9 @@ def test_merge_hooks_only_substitutes_traffic_light_dir():
     assert "auto-stop.sh" not in text
     assert "$ProjectName" not in text
     assert "TRAFFIC_LIGHT_DIR" in text
+    assert "TRAFFIC_LIGHT_LAUNCH" in text
+    assert "run-hidden.pyw" in text
+    assert "traffic_light.exe" in text
 
 
 def test_readme_documents_support_matrix_and_degradation():

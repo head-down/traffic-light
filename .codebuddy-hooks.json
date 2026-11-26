@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh session-start"
+            "command": "TRAFFIC_LIGHT_LAUNCH session-start"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh prompt"
+            "command": "TRAFFIC_LIGHT_LAUNCH prompt"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh tool"
+            "command": "TRAFFIC_LIGHT_LAUNCH tool"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh notify"
+            "command": "TRAFFIC_LIGHT_LAUNCH notify"
           }
         ]
       }
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh stop"
+            "command": "TRAFFIC_LIGHT_LAUNCH stop"
           }
         ]
       }
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh end"
+            "command": "TRAFFIC_LIGHT_LAUNCH end"
           }
         ]
       }

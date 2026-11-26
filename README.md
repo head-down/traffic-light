@@ -77,7 +77,7 @@ bash install.sh --global
 
 - 旧计划任务 `traffic-light-<项目>` 会被删除；新格式 `traffic-light-w<hwnd>` 是否存活只看锚文件。
 - 旧状态文件 `.state`（后缀非纯数字）、`.pid`、`.cbpid` 一律清理。
-- 旧版两个 hook 入口已删除，重新安装时对应 hook 会被替换为统一的 `hooks/traffic-light.sh`。
+- 旧版两个 hook 入口已删除，重新安装时对应 hook 会被整组替换为无窗口启动器（`traffic_light.exe --hook`，源码安装为 `pythonw hooks/run-hidden.pyw`）。
 - `.win` 锚超过阈值未刷新视为孤儿灯，一并删除。
 
 GC 在安装脚本与每次 SessionStart 各跑一次，幂等，旧任务 / 状态文件 / 孤儿锚**自动清理**，无需手工干预。重复安装/升级只会更新 hooks，不会出现第二盏灯。
@@ -88,7 +88,9 @@ EXE 与源码两种方式都只需配一次 hooks，之后每次打开 CodeBuddy
 
 ### 自动启动机制
 
-CodeBuddy 的六个事件统一走 `hooks/traffic-light.sh <event>`：
+CodeBuddy 的六个事件统一走 `hooks/traffic-light.sh <event>`，由 GUI 子系统宿主
+（`traffic_light.exe --hook` 或 `pythonw hooks/run-hidden.pyw`）拉起，里面的 bash 用
+`CREATE_NO_WINDOW` 启动，所以**每次事件不会弹控制台黑框**：
 
 ```
 SessionStart      → 解析会话进程/窗口 → 写绑定 → 抢窗/拉灯 → GC

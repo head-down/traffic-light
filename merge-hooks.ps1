@@ -53,6 +53,32 @@ $templateRaw = $templateRaw -replace [regex]::Escape("TRAFFIC_LIGHT_DIR"), $unix
 
 $template = $templateRaw | ConvertFrom-Json
 
+# ---- 1b. 无窗口启动器 ------------------------------------------------------
+# CodeBuddy 从不带控制台的进程里拉起 hook；直接调 bash 会弹一个黑框。优先用
+# 同目录的交通灯 EXE（--hook 模式），其次 pythonw + hooks/run-hidden.pyw，
+# 两者都是 GUI 子系统，里面的 bash 用 CREATE_NO_WINDOW 起。
+$winDir = $SignalLightDir -replace '\\', '/'
+if (Test-Path -LiteralPath (Join-Path $SignalLightDir 'traffic_light.exe')) {
+    $launcher = '"' + $winDir + '/traffic_light.exe" --hook'
+} else {
+    $pythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
+    if ($pythonw) {
+        $launcher = '"' + ($pythonw -replace '\\', '/') + '" "' + $winDir + '/hooks/run-hidden.pyw"'
+    } else {
+        Write-Output '[warn] 找不到 pythonw 也没有 traffic_light.exe：hook 退回 bash，每次事件可能闪一下控制台'
+        $launcher = 'LC_ALL=C.UTF-8 bash --noprofile --norc ' + $unixDir + '/hooks/traffic-light.sh'
+    }
+}
+foreach ($hookEvent in $template.hooks.PSObject.Properties) {
+    foreach ($group in @($hookEvent.Value)) {
+        foreach ($h in @($group.hooks)) {
+            if ($h.command -and $h.command -like 'TRAFFIC_LIGHT_LAUNCH*') {
+                $h.command = $h.command -replace '^TRAFFIC_LIGHT_LAUNCH', $launcher
+            }
+        }
+    }
+}
+
 # ---- 2. 读取已有配置 ----
 $isNew = $false
 if (Test-Path $OutputPath) {
@@ -68,6 +94,13 @@ if (Test-Path $OutputPath) {
 }
 
 # ---- 3. 检查是否有 SignalLight hooks 已存在 ----
+# 旧版本入口（auto-bind/auto-stop/bind.sh/旧状态名）已随升级删除，留着只会在
+# 每次事件报错；本版入口有两种形态，都靠 GUI 子系统宿主避免弹黑框：
+#   pythonw <dir>/hooks/run-hidden.pyw <事件名>
+#   <dir>/traffic_light.exe --hook <事件名>
+# 命令形态会随版本变化，所以按「属于交通灯」判定，不按具体命令。
+$SIGNALLIGHT_ENTRY_PATTERN = 'auto-(bind|stop)\.sh|\bbind\.sh\b|traffic-light\.sh|run-hidden\.pyw|traffic_light\.exe"?\s+--hook'
+
 $alreadyInstalled = $false
 if (-not $isNew -and (Get-Member -InputObject $existing -Name "hooks" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
     # 以 SessionStart 中的 traffic-light.sh 为标志
@@ -76,7 +109,7 @@ if (-not $isNew -and (Get-Member -InputObject $existing -Name "hooks" -MemberTyp
         foreach ($hookGroup in @($existingHooks.SessionStart)) {
             if ($hookGroup.hooks) {
                 foreach ($h in $hookGroup.hooks) {
-                    if ($h.command -match 'traffic-light\.sh') {
+                    if ($h.command -match $SIGNALLIGHT_ENTRY_PATTERN) {
                         $alreadyInstalled = $true
                         break
                     }
@@ -101,12 +134,8 @@ function Test-CommandExists {
     return $false
 }
 
-# 旧版本的 hook 入口已随本次升级删除，留着只会在每次事件报错。
-# v1.0.0 及更早的入口有三种形态：
-#   auto-bind / auto-stop / bind.sh --project
-#   hooks/traffic-light.sh <旧状态名>（idle|thinking|running|waiting|success）
-# 新入口是 hooks/traffic-light.sh <事件名>，event `end` 属于新契约，不能误删。
-$LEGACY_HOOK_PATTERN = 'auto-(bind|stop)\.sh|\bbind\.sh\b|traffic-light\.sh[\s"'']+(idle|thinking|running|waiting|success)([\s"'';]|$)'
+# 属于交通灯的 hook 都靠同一组特征识别，重装时整组替换。
+$LEGACY_HOOK_PATTERN = $SIGNALLIGHT_ENTRY_PATTERN
 
 function Remove-LegacyHooks {
     param($ExistingHookGroups)

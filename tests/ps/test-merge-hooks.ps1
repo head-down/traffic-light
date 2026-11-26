@@ -107,8 +107,12 @@ try {
     foreach ($e in @('SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd')) {
         Assert-True ('has ' + $e) ($events -contains $e)
     }
-    Assert-True 'session-start is wired' (@($cmds | Where-Object { $_.Command -match 'traffic-light\.sh session-start$' }).Count -ge 1)
-    Assert-True 'end event is kept' (@($cmds | Where-Object { $_.Command -match 'traffic-light\.sh end$' }).Count -ge 1)
+    # 入口可能是 traffic_light.exe --hook、pythonw run-hidden.pyw 或（没有 pythonw 时）
+    # 退回 bash，三者都必须以事件名结尾
+    $launcher = '(run-hidden\.pyw"?|traffic_light\.exe"?\s+--hook|traffic-light\.sh)\s+'
+    Assert-True 'session-start is wired' (@($cmds | Where-Object { $_.Command -match ($launcher + 'session-start$') }).Count -ge 1)
+    Assert-True 'end event is kept' (@($cmds | Where-Object { $_.Command -match ($launcher + 'end$') }).Count -ge 1)
+    Assert-True 'entries go through a windowless launcher' (@($cmds | Where-Object { $_.Command -match 'run-hidden\.pyw|--hook' }).Count -ge 1)
     Assert-True 'user hook survives' (@($cmds | Where-Object { $_.Command -match 'echo user-session-start' }).Count -eq 1)
 
     $j = Get-Content -LiteralPath $settings -Raw -Encoding UTF8 | ConvertFrom-Json
