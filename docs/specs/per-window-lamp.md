@@ -70,6 +70,7 @@
 - hwnd 必须靠 attach-console 获取：短命解析进程内 `FreeConsole → AttachConsole(目标 pid) → GetConsoleWindow`；若得到 `PseudoConsoleWindow` 或零尺寸，取 `GW_OWNER`；再用 `IsWindow + IsWindowVisible + rect ≥ 50×50` 验收。探针实测该路径在 Windows Terminal（ConPTY）下有效，父链上溯拿不到窗口。
 - attach 只在短命解析进程里发生，drawer 永不 attach（它没有控制台，attach 会挂上一个甚至闪窗）。
 - 解析失败不静默：写 `degraded=1` 的绑定（pid 仍可用），进入降级灯。
+- **最小化窗口不能用 `GetWindowRect`**：实测最小化的终端只返回 159×27 的桩尺寸，会误判成"无窗口"。尺寸与定位一律取 `GetWindowPlacement` 的还原矩形；`IsIconic` 单独作为可见性信号。
 
 ### 写入与并发
 
@@ -143,3 +144,5 @@
 - 两台机器上的用户执行策略大概率是 Restricted，所有 ps1 调用统一 `-NoProfile -ExecutionPolicy Bypass`；漏一处即静默失效。
 - 发布包必须包含解析脚本，否则 EXE 用户灯全灭。
 - 小概率但需接受：解析失败期间该会话无窗可贴，只能出现在降级灯上，直到下一条提示重新解析成功。
+- **探针结论（2026-11-26，本机实测）**：两个真实会话各自解析出不同 hwnd（1199×616 与最小化窗口），门禁判定 go；扫描中的第三个失败项经确认为"该窗口未运行 CodeBuddy"的残留 node 进程——没有 hook、没有绑定，本就不该有灯，不属于降级场景。
+- 同一个 WindowsTerminal 进程承载多个窗口时，各窗口 hwnd 不同、可区分；只有同一窗口的多个标签页才共享 hwnd，正好对应同窗聚合规则。
