@@ -95,7 +95,7 @@ class LightPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._state = "idle"
+        self._state = None    # None = 还没有应用过状态，第一次 set_state 必须生效
         self._project_name = ""
         self._badge = ""
         self._active_radius = LIGHT_RADIUS
@@ -180,7 +180,13 @@ class LightPanel(QWidget):
 
     # ---- 状态切换 ----
     def set_state(self, state):
-        """更新显示状态"""
+        """更新显示状态。
+
+        幂等：drawer 每 300ms 刷新一次，状态没变时不能重启动画，否则跑马灯 /
+        警灯 / 呼吸会被反复重置，看起来就是「闪烁速度不对」。
+        """
+        if state == self._state:
+            return
         self._state = state
 
         # 停止旧动画
