@@ -1,20 +1,62 @@
 <#
-Traffic Light - terminal hwnd probe (go/no-go before touching the daemon)
+.SYNOPSIS
+    Probe a terminal's real window (hwnd) - the go/no-go gate for one lamp per window.
 
-Run once inside EACH terminal you want to support:
+.DESCRIPTION
+    Run once inside EACH terminal you want to support:
 
+        powershell -NoProfile -ExecutionPolicy Bypass -File probe.ps1
+
+    Two runs in two terminals are expected to yield two DIFFERENT hwnd values.
+    Same value means the terminals share one window (e.g. two Windows Terminal
+    tabs), which aggregates into one lamp by design.
+
+    The full report explains every step (self, parent chain, attach-console,
+    top-level windows). A minimized window is measured by its restore rect, so
+    it is never mistaken for a missing window.
+
+    Note: this script deliberately prints through Say, never Write-Host.
+    Attaching and detaching consoles invalidates the host's console buffer, and
+    Write-Host crashes with a HostException after that.
+
+.PARAMETER TargetPid
+    Start the parent-chain walk at this pid instead of the current PowerShell
+    process. Use it when probing a session from a plain shell.
+
+.PARAMETER ScanAll
+    List every CodeBuddy node process on the machine, resolve each one's hwnd,
+    and report whether any two share a window. Prints no per-step detail.
+
+.PARAMETER Verdict
+    Print exactly one line, for acceptance records:
+
+        hwnd=<decimal> class=<class> size=<w>x<h> verdict=go|no-go
+
+    No window resolves -> hwnd=0 class=- size=0x0 verdict=no-go. Ignored
+    combination: -Verdict wins over -ScanAll (ScanAll output is suppressed).
+
+.EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File probe.ps1
 
-Two runs in two terminals are expected to yield two DIFFERENT hwnd values.
-Same value means the terminals share one window (e.g. two Windows Terminal tabs).
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File probe.ps1 -Verdict
 
-Note: this script deliberately uses Write-Output, never Write-Host. Attaching and
-detaching consoles invalidates the host's console buffer, and Write-Host crashes
-with a HostException after that.
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File probe.ps1 -ScanAll
 #>
-param([int]$TargetPid = 0, [switch]$ScanAll)
+param([int]$TargetPid = 0, [switch]$ScanAll, [switch]$Verdict)
 
 $ErrorActionPreference = 'SilentlyContinue'
+
+# -Verdict is for acceptance records: one parseable line, nothing else.
+if ($Verdict) { $ScanAll = $false }
+$script:Quiet = [bool]$Verdict
+
+function Say {
+    param([string]$Text = '')
+    if ($script:Quiet) { return }
+    [Console]::Out.WriteLine($Text)
+}
 
 Add-Type -TypeDefinition @"
 using System;
@@ -75,11 +117,11 @@ function Get-WindowInfo([IntPtr]$h) {
 }
 
 if ($ScanAll) {
-    Write-Output ''
-    Write-Output '=== SCAN ALL CODEBUDDY SESSIONS ==='
+    Say ''
+    Say '=== SCAN ALL CODEBUDDY SESSIONS ==='
     $nodes = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
         Where-Object { $_.CommandLine -match 'node_modules' -and $_.CommandLine -match 'codebuddy' })
-    if ($nodes.Count -eq 0) { Write-Output 'no codebuddy node process found'; exit 0 }
+    if ($nodes.Count -eq 0) { Say 'no codebuddy node process found'; exit 0 }
     $rows = @()
     foreach ($n in $nodes) {
         $chain2 = @()
@@ -113,34 +155,34 @@ if ($ScanAll) {
         }
         $hw = if ($h2 -eq [IntPtr]::Zero) { '(none)' } else { ('0x{0:X}' -f $h2.ToInt64()) }
         $rows += [pscustomobject]@{ Pid = $n.ProcessId; Hwnd = $hw; Cwd = $cwd }
-        Write-Output ("pid={0,-7} hwnd={1,-10} cwd={2}" -f $n.ProcessId, $hw, $cwd)
+        Say ("pid={0,-7} hwnd={1,-10} cwd={2}" -f $n.ProcessId, $hw, $cwd)
     }
-    Write-Output ''
+    Say ''
     $dupes = @($rows | Where-Object { $_.Hwnd -ne '(none)' } | Group-Object Hwnd | Where-Object { $_.Count -gt 1 })
     if ($dupes.Count -gt 0) {
-        Write-Output 'SHARED WINDOW: these sessions report the same hwnd (tabs of one window) -> aggregate with /N'
+        Say 'SHARED WINDOW: these sessions report the same hwnd (tabs of one window) -> aggregate with /N'
     } else {
-        Write-Output 'ALL DISTINCT: each session resolved its own window'
+        Say 'ALL DISTINCT: each session resolved its own window'
     }
     exit 0
 }
 
-Write-Output ''
-Write-Output '=== 1. SELF ==='
-Write-Output ("powershell pid = {0}" -f $PID)
+Say ''
+Say '=== 1. SELF ==='
+Say ("powershell pid = {0}" -f $PID)
 $selfConsole = [TLProbe]::GetConsoleWindow()
 if ($selfConsole -ne [IntPtr]::Zero) {
     $w = Get-WindowInfo $selfConsole
-    Write-Output ("console hwnd = {0}  class={1}  visible={2}  size={3}x{4}" -f $w.Hwnd, $w.Class, $w.Visible, $w.W, $w.H)
+    Say ("console hwnd = {0}  class={1}  visible={2}  size={3}x{4}" -f $w.Hwnd, $w.Class, $w.Visible, $w.W, $w.H)
     if ($w.Class -match 'PseudoConsole') {
-        Write-Output 'RED FLAG: PseudoConsoleWindow (ConPTY) -> must use GW_OWNER'
+        Say 'RED FLAG: PseudoConsoleWindow (ConPTY) -> must use GW_OWNER'
     }
 } else {
-    Write-Output 'console hwnd = (none) -> no console attached (detached spawn, or pty)'
+    Say 'console hwnd = (none) -> no console attached (detached spawn, or pty)'
 }
 
-Write-Output ''
-Write-Output '=== 2. CHAIN (leaf -> root) ==='
+Say ''
+Say '=== 2. CHAIN (leaf -> root) ==='
 $start = if ($TargetPid -gt 0) { $TargetPid } else { $PID }
 $chain = @()
 $cur = [int]$start
@@ -158,40 +200,40 @@ for ($i = 0; $i -lt 12 -and $cur -gt 0; $i++) {
 }
 foreach ($c in $chain) {
     $short = if ($c.Cmd.Length -gt 110) { $c.Cmd.Substring(0,110) } else { $c.Cmd }
-    Write-Output ("pid={0,-7} ppid={1,-7} {2,-22} {3:yyyy-MM-dd HH:mm:ss}" -f $c.Pid, $c.PPid, $c.Name, $c.Started)
-    Write-Output ("        cmd: {0}" -f $short)
+    Say ("pid={0,-7} ppid={1,-7} {2,-22} {3:yyyy-MM-dd HH:mm:ss}" -f $c.Pid, $c.PPid, $c.Name, $c.Started)
+    Say ("        cmd: {0}" -f $short)
 }
 
-Write-Output ''
-Write-Output '=== 3A. ATTACH-CONSOLE (real console window per pid) ==='
+Say ''
+Say '=== 3A. ATTACH-CONSOLE (real console window per pid) ==='
 $attachHits = @()
 foreach ($c in $chain) {
     [TLProbe]::FreeConsole() | Out-Null
     $ok = [TLProbe]::AttachConsole([uint32]$c.Pid)
     if (-not $ok) {
-        Write-Output ("  [{0} {1}] attach failed (no console / access denied)" -f $c.Pid, $c.Name)
+        Say ("  [{0} {1}] attach failed (no console / access denied)" -f $c.Pid, $c.Name)
         continue
     }
     $h = [TLProbe]::GetConsoleWindow()
     [TLProbe]::FreeConsole() | Out-Null
     if ($h -eq [IntPtr]::Zero) {
-        Write-Output ("  [{0} {1}] attached but GetConsoleWindow() = 0" -f $c.Pid, $c.Name)
+        Say ("  [{0} {1}] attached but GetConsoleWindow() = 0" -f $c.Pid, $c.Name)
         continue
     }
     $w = Get-WindowInfo $h
-    Write-Output ("  [{0} {1}] console {2}  class={3,-24} visible={4,-5} size={5}x{6}" -f $c.Pid, $c.Name, $w.Hwnd, $w.Class, $w.Visible, $w.W, $w.H)
+    Say ("  [{0} {1}] console {2}  class={3,-24} visible={4,-5} size={5}x{6}" -f $c.Pid, $c.Name, $w.Hwnd, $w.Class, $w.Visible, $w.W, $w.H)
     $owner = [TLProbe]::GetWindow($h, 4)
     if ($owner -ne [IntPtr]::Zero) {
         $ow = Get-WindowInfo $owner
-        Write-Output ("      GW_OWNER -> {0} class={1} visible={2} size={3}x{4} title='{5}'" -f $ow.Hwnd, $ow.Class, $ow.Visible, $ow.W, $ow.H, $ow.Title)
+        Say ("      GW_OWNER -> {0} class={1} visible={2} size={3}x{4} title='{5}'" -f $ow.Hwnd, $ow.Class, $ow.Visible, $ow.W, $ow.H, $ow.Title)
     } else {
-        Write-Output '      GW_OWNER -> (none)'
+        Say '      GW_OWNER -> (none)'
     }
-    $attachHits += [pscustomobject]@{ Pid = $c.Pid; Name = $c.Name; Hwnd = $w.Hwnd; Class = $w.Class; W = $w.W; H = $w.H; OwnerHwnd = $owner }
+    $attachHits += [pscustomobject]@{ Pid = $c.Pid; Name = $c.Name; Hwnd = $w.Hwnd; Class = $w.Class; W = $w.W; H = $w.H; OwnerHwnd = $owner; Raw = $h }
 }
 
-Write-Output ''
-Write-Output '=== 3B. TOP-LEVEL WINDOWS (visible, owned by chain pid) ==='
+Say ''
+Say '=== 3B. TOP-LEVEL WINDOWS (visible, owned by chain pid) ==='
 $script:winMap = @{}
 $cb = [TLProbe+EnumProc]{
     param([IntPtr]$h, [IntPtr]$l)
@@ -215,21 +257,22 @@ $upHits = @()
 foreach ($p in ($chain + $kidPids)) {
     $hwnds = $script:winMap[$p.Pid]
     if (-not $hwnds) {
-        if ($chainPids -contains $p.Pid) { Write-Output ("  [{0} {1}] no top-level window" -f $p.Pid, $p.Name) }
+        if ($chainPids -contains $p.Pid) { Say ("  [{0} {1}] no top-level window" -f $p.Pid, $p.Name) }
         continue
     }
     foreach ($h in $hwnds) {
         $w = Get-WindowInfo $h
         if (-not $w.Visible) { continue }
         if ($w.W -lt 50 -or $w.H -lt 50) { continue }
-        Write-Output ("  [{0} {1}] {2} class={3,-28} size={4}x{5} title='{6}'" -f $p.Pid, $p.Name, $w.Hwnd, $w.Class, $w.W, $w.H, $w.Title)
-        $upHits += [pscustomobject]@{ Pid = $p.Pid; Name = $p.Name; Hwnd = $w.Hwnd; Class = $w.Class; Area = ($w.W * $w.H) }
+        Say ("  [{0} {1}] {2} class={3,-28} size={4}x{5} title='{6}'" -f $p.Pid, $p.Name, $w.Hwnd, $w.Class, $w.W, $w.H, $w.Title)
+        $upHits += [pscustomobject]@{ Pid = $p.Pid; Name = $p.Name; Hwnd = $w.Hwnd; Class = $w.Class; Area = ($w.W * $w.H); Raw = $h }
     }
 }
 
-Write-Output ''
-Write-Output '=== 4. VERDICT ==='
+Say ''
+Say '=== 4. VERDICT ==='
 $picked = $null
+$pickedRaw = [IntPtr]::Zero
 $how = ''
 foreach ($hit in $attachHits) {
     if ($hit.Class -match 'PseudoConsole') {
@@ -237,6 +280,7 @@ foreach ($hit in $attachHits) {
         $ow = Get-WindowInfo $hit.OwnerHwnd
         if ($ow -and $ow.W -ge 50 -and $ow.H -ge 50) {
             $picked = $ow.Hwnd
+            $pickedRaw = $ow.HwndRaw
             $how = ("attach->owner  (pid {0} {1})" -f $hit.Pid, $hit.Name)
             break
         }
@@ -244,6 +288,7 @@ foreach ($hit in $attachHits) {
     }
     if ($hit.W -ge 50 -and $hit.H -ge 50) {
         $picked = $hit.Hwnd
+        $pickedRaw = $hit.Raw
         $how = ("attach         (pid {0} {1})" -f $hit.Pid, $hit.Name)
         break
     }
@@ -254,24 +299,37 @@ if (-not $picked) {
         if ($pool.Count -gt 0) {
             $best = ($pool | Sort-Object Area -Descending | Select-Object -First 1)
             $picked = $best.Hwnd
+            $pickedRaw = $best.Raw
             $how = ("upchain        (pid {0} {1})" -f $best.Pid, $best.Name)
             break
         }
     }
 }
 
+if ($Verdict) {
+    if ($pickedRaw -ne [IntPtr]::Zero) {
+        $vw = Get-WindowInfo $pickedRaw
+        $word = if ($vw.W -ge 50 -and $vw.H -ge 50) { 'go' } else { 'no-go' }
+        $line = 'hwnd=' + $pickedRaw.ToInt64() + ' class=' + $vw.Class + ' size=' + $vw.W + 'x' + $vw.H + ' verdict=' + $word
+        [Console]::Out.WriteLine($line)
+    } else {
+        [Console]::Out.WriteLine('hwnd=0 class=- size=0x0 verdict=no-go')
+    }
+    exit 0
+}
+
 if ($picked) {
-    Write-Output ("BIND CANDIDATE hwnd = {0}   [{1}]" -f $picked, $how)
+    Say ("BIND CANDIDATE hwnd = {0}   [{1}]" -f $picked, $how)
 } else {
-    Write-Output 'NO CANDIDATE: nothing bindable found'
+    Say 'NO CANDIDATE: nothing bindable found'
 }
 
 $cbs = @($chain | Where-Object { $_.Name -match '^node\.exe$' -and $_.Cmd -match 'node_modules' -and $_.Cmd -match 'codebuddy' })
-Write-Output ''
+Say ''
 if ($cbs.Count -eq 0) {
-    Write-Output 'NOTE: no codebuddy node process in this chain (ran from a plain shell).'
-    Write-Output '      For the real test run it through a hook, or pass -TargetPid <node pid>.'
+    Say 'NOTE: no codebuddy node process in this chain (ran from a plain shell).'
+    Say '      For the real test run it through a hook, or pass -TargetPid <node pid>.'
 } else {
-    Write-Output ("codebuddy node pid = {0}  (started {1:yyyy-MM-dd HH:mm:ss})" -f $cbs[0].Pid, $cbs[0].Started)
+    Say ("codebuddy node pid = {0}  (started {1:yyyy-MM-dd HH:mm:ss})" -f $cbs[0].Pid, $cbs[0].Started)
 }
-Write-Output 'PASTE THIS WHOLE OUTPUT BACK, ONE PER TERMINAL.'
+Say 'PASTE THIS WHOLE OUTPUT BACK, ONE PER TERMINAL.'
