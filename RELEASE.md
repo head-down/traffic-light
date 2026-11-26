@@ -57,7 +57,7 @@ bash install.sh <你的CodeBuddy项目路径>
 模型调用工具 → PostToolUse → 黄灯呼吸
 等待你确认 → Notification → 红黄警灯
 本轮完成 → Stop → 绿灯脉冲 → 8 秒后灭灯
-关闭 CodeBuddy → SessionEnd → 自动清理退出
+关闭 CodeBuddy → SessionEnd → 状态置 ended，窗口消失后灯自灭
 ```
 
 全程无需手动操作，CodeBuddy 启动灯就来，退出灯就走。
@@ -102,16 +102,16 @@ pip install -r requirements.txt
 bash install.sh --global        # 全局安装（推荐）
 # 或 bash install.sh <项目路径>  # 项目级安装
 
-# 手动启动（不用 hooks 自动启动时）
-bash bind.sh --project <项目名>
+# 不需要手动启动：SessionStart 会自动解析本会话的终端窗口并拉起那盏灯
+
 ```
 
 ## 技术细节
 
 - **通信方式**：文件系统轮询（hook 写文件 → 守护进程 300ms 轮询），延迟约 115ms
-- **跨项目隔离**：按项目目录名命名状态文件，不同项目完全解耦
-- **单实例保护**：PID 文件锁 + PowerShell 进程清理，不会多开
-- **异常退出兜底**：守护进程每 5 秒检测 CodeBuddy 是否存活，Ctrl+C 关闭后约 10 秒自动退出
+- **一窗一灯**：按终端 hwnd 绑定，一个窗口一盏灯；同窗口多会话聚合为 `·N`，不同窗口互不影响
+- **抢窗保护**：锚文件 `CreateNew` 原子独占，同一窗口只会有一个 drawer
+- **异常退出兜底**：窗口失效、owner 不匹配或本窗无活会话连续 3 次心跳，灯自灭并注销计划任务
 - **TTL 机制**：各状态有过期时间（thinking 600s / running 90s / success 8s），防止残留
 
 ## 反馈

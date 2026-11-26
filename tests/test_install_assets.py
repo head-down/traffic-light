@@ -106,6 +106,17 @@ def test_install_sh_runs_gc_once_after_install():
     assert text.index("merge-hooks.ps1") < text.index("-GcOnly")
 
 
+def test_no_legacy_project_level_entrypoint():
+    # 破坏式升级：项目级入口 bind.sh 与 resolve.ps1 的 -Project 参数都不保留
+    assert not (REPO / "bind.sh").exists()
+    resolver = (REPO / "resolve.ps1").read_text(encoding="utf-8")
+    assert "bind.sh" not in resolver
+    assert "[string]$Project" not in resolver
+    release = (REPO / "RELEASE.md").read_text(encoding="utf-8")
+    assert "bind.sh" not in release
+    assert "--project" not in release
+
+
 def test_install_sh_has_no_project_level_key():
     text = _install_sh()
     assert "--project" not in text
