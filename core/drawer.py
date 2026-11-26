@@ -178,3 +178,20 @@ class DrawerGuard:
     @property
     def zero_streak(self):
         return self._zero_streak
+
+
+# ============================================================
+# 降级灯（全机一盏，锚 w0.win）
+# ============================================================
+
+def degraded_label(view):
+    """降级灯主标签：`<project> ?`；无降级会话时不显示标签。"""
+    if view is None or not view.count:
+        return ""
+    return ("%s ?" % view.label) if view.label else "?"
+
+
+def degraded_beat(guard, anchor, live_count):
+    """降级灯心跳：没有可跟随的窗口与 owner，只按降级会话数判自灭。"""
+    return guard.check(anchor, window_alive=True, owner=None,
+                       live_count=live_count)
