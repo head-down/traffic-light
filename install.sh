@@ -76,7 +76,7 @@ if [ "$GLOBAL_MODE" = true ]; then
     echo "  正在合并 hooks 配置到全局 settings.json..."
     echo ""
 
-    RESULT=$(powershell -NoProfile -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/merge-hooks.ps1" \
+    RESULT=$(powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/merge-hooks.ps1" \
         -TemplatePath "$TEMPLATE" \
         -SignalLightDir "$WIN_SCRIPT_DIR" \
         -Global 2>&1)
@@ -99,7 +99,7 @@ else
     echo "  正在合并 hooks 配置..."
     echo ""
 
-    RESULT=$(powershell -NoProfile -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/merge-hooks.ps1" \
+    RESULT=$(powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$WIN_SCRIPT_DIR/merge-hooks.ps1" \
         -TemplatePath "$TEMPLATE" \
         -OutputPath "$OUTPUT" \
         -SignalLightDir "$WIN_SCRIPT_DIR" \

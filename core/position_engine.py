@@ -165,6 +165,16 @@ class PositionEngine:
         x = int(x_phys / dpr)
         y = int(y_phys / dpr)
 
+        # 越界保护：终端最大化或贴着屏幕底边时，"终端下方"会落到屏幕外，
+        # 此时改叠到终端内侧右下角，最后再夹回可用屏幕区域
+        avail = screen.availableGeometry()
+        w, h = self._window.WIDTH, self._window.HEIGHT
+        if y + h > avail.bottom() - 4:
+            x = int((rect[2] - w * dpr) // dpr) - 24
+            y = int((rect[3] - h * dpr) // dpr) - 24
+        x = max(avail.left() + 8, min(x, avail.right() - w - 8))
+        y = max(avail.top() + 8, min(y, avail.bottom() - h - 8))
+
         if not self._window.isVisible():
             self._window.show()
             self._owner_set = False  # Qt show() 可能重置 owner
