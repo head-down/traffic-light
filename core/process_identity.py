@@ -39,6 +39,38 @@ def _to_filetime(value):
         return None
 
 
+def process_creation_ft(pid):
+    """返回进程创建时间（十进制 FILETIME 字符串）；拿不到返回空串。"""
+    if not _IS_WINDOWS:
+        return ""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return ""
+    if pid <= 0:
+        return ""
+
+    from ctypes import wintypes
+    kernel32 = _get_kernel32()
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                  False, pid)
+    if not handle:
+        return ""
+    try:
+        created = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(handle, ctypes.byref(created),
+                                        ctypes.byref(exited),
+                                        ctypes.byref(kernel),
+                                        ctypes.byref(user)):
+            return ""
+        return str((created.dwHighDateTime << 32) | created.dwLowDateTime)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def is_process_alive(pid, creation_ft=None):
     """pid 存活且创建时间匹配（若提供）时返回 True。
 

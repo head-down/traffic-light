@@ -1,18 +1,24 @@
 #!/usr/bin/env python
 """
-信号灯守护进程 — Windows 桌面悬浮窗，聚合多个 CodeBuddy / CLI agent 状态
+信号灯 drawer — 一个终端窗口（hwnd）一盏悬浮灯
 
 用法:
-    python traffic_light.py                      # 启动守护进程（聚合所有项目）
-    python traffic_light.py --project mine       # 绑定到指定项目
+    python traffic_light.py --hwnd <十进制> [--nonce <hex>]
 
-Hook 脚本通过文件系统写状态文件，守护进程 300ms 轮询聚合显示:
-    红灯(失败) > 黄灯(运行中) > 绿灯(成功) > 灭灯(空闲)
+由解析器写好锚（.traffic-light-states/w<hwnd>.win）后拉起；drawer 只读
+本窗绑定聚合渲染，每 1000ms 刷新锚 mtime 作为心跳，窗口失效 / owner
+（pid + 创建时间）不匹配 / 本窗零活 pid 连续 3 次心跳 / nonce 被替换时
+注销自己并退出。
+
+状态目录由自身位置推导（源码版 = 脚本目录，frozen = EXE 目录），命令行
+只传 hwnd 与 nonce（schtasks /TR 有 261 字符上限）。不写 .pid 文件，
+自己的 pid 写进锚的 drawer_pid=。
 """
-import sys
-import os
-import ctypes
 import argparse
+import ctypes
+import os
+import subprocess
+import sys
 
 # 必须在 QApplication 创建前设置 DPI awareness
 # 系统 DPI 缩放 150%，不设置的话 GetWindowRect 返回虚拟化坐标（缩放后的），
@@ -36,67 +42,183 @@ if not _dpi_set:
         except Exception:
             pass
 
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 
-from core.overlay_window import TrafficLightWindow
+from core.drawer import (
+    EXIT_NONCE,
+    HEARTBEAT_MS,
+    TICK_MS,
+    Anchor,
+    DrawerGuard,
+    anchor_path,
+    derive_state_dir,
+    read_anchor,
+    touch_anchor,
+    write_anchor,
+)
 from core.light_panel import LightPanel
-from core.state_manager import StateManager
-from core.lifecycle import LifecycleManager
-from core.terminal_adapter import TerminalAdapter
+from core.overlay_window import TrafficLightWindow
 from core.position_engine import PositionEngine
+from core.session_view import FileSystemSources, SessionView
+from core.terminal_adapter import TerminalAdapter
+from core.terminal_tracker import get_window_owner, is_window
 
 
-def main():
-    parser = argparse.ArgumentParser(description="信号灯守护进程")
-    parser.add_argument(
-        "--project", type=str, default=None,
-        help="绑定项目名（对应 <project>.state），不指定则聚合所有项目",
-    )
-    args = parser.parse_args()
+def _redirect_logs(state_dir):
+    """stdout/stderr → daemon.log；pythonw 下没有控制台，print 会炸。"""
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        log = open(os.path.join(state_dir, "daemon.log"), "a",
+                   buffering=1, encoding="utf-8")
+    except OSError:
+        return
+    sys.stdout = log
+    sys.stderr = log
 
-    # PyInstaller 打包后 __file__ 指向 _internal/ 下层，
-    # 需要用 sys.executable 获取 EXE 所在目录
-    if getattr(sys, 'frozen', False):
-        _script_dir = os.path.dirname(sys.executable)
-    else:
-        _script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    pid_dir = os.path.join(_script_dir, ".traffic-light-states")
+def _unregister_task(hwnd):
+    """注销本窗计划任务（杀灯的唯一路径是 drawer 自检）。"""
+    try:
+        subprocess.run(
+            ["schtasks", "/Delete", "/TN", "traffic-light-w%d" % hwnd, "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except OSError:
+        pass
 
-    # Phase 1: 进程生命周期（PID 锁 + 日志重定向 + PID 文件写入）
-    lifecycle = LifecycleManager(args.project, pid_dir)
 
-    # Phase 2: Qt 应用
-    app = QApplication(sys.argv)
+class _DrawerLoop:
+    """渲染 tick（300ms）+ 心跳 tick（1000ms）。"""
+
+    def __init__(self, app, hwnd, guard, anchor_file, state_dir,
+                 window, panel):
+        self._app = app
+        self._hwnd = hwnd
+        self._guard = guard
+        self._anchor_file = anchor_file
+        self._window = window
+        self._panel = panel
+        self._view = SessionView(FileSystemSources(state_dir), hwnd=hwnd)
+        self._live_count = 0
+        self._stopped = False
+
+        self._render_timer = QTimer(app)
+        self._render_timer.timeout.connect(self._render)
+        self._render_timer.setInterval(TICK_MS)
+
+        self._beat_timer = QTimer(app)
+        self._beat_timer.timeout.connect(self._beat)
+        self._beat_timer.setInterval(HEARTBEAT_MS)
+
+    def start(self):
+        self._render()
+        self._render_timer.start()
+        self._beat_timer.start()
+
+    def _render(self):
+        view = self._view.snapshot()
+        self._live_count = view.count
+        self._panel.set_state(view.state)
+        self._panel.set_project_name(view.label)
+        self._panel.set_badge(view.count)
+        self._window.set_glow_color(view.state)
+
+    def _beat(self):
+        # 先验 nonce，再刷 mtime：被取代的 drawer 不能替新锚续命
+        anchor = read_anchor(self._anchor_file)
+        decision = self._guard.check(
+            anchor,
+            window_alive=is_window(self._hwnd),
+            owner=get_window_owner(self._hwnd),
+            live_count=self._live_count,
+        )
+        if decision is None:
+            touch_anchor(self._anchor_file)
+            return
+        self._die(decision)
+
+    def _die(self, decision):
+        if self._stopped:
+            return
+        self._stopped = True
+        self._render_timer.stop()
+        self._beat_timer.stop()
+        if decision.reason != EXIT_NONCE:
+            # 被取代时任务与锚已归新实例，旧 drawer 一律不碰
+            _unregister_task(self._hwnd)
+        if decision.remove_anchor:
+            try:
+                os.remove(self._anchor_file)
+            except OSError:
+                pass
+        self._window.hide()
+        self._app.quit()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="一窗一灯的 drawer")
+    parser.add_argument("--hwnd", type=int, required=True,
+                        help="终端窗口句柄（十进制）")
+    parser.add_argument("--nonce", type=str, default="",
+                        help="锚文件实例 nonce；不传则不校验")
+    args = parser.parse_args(argv)
+
+    state_dir = derive_state_dir()
+    anchor_file = anchor_path(state_dir, args.hwnd)
+    anchor = read_anchor(anchor_file)
+    if anchor is None:
+        # 没有锚就没有要渲染的窗口，也绝不自己造锚
+        return 0
+
+    guard = DrawerGuard(nonce=args.nonce or None)
+    if guard.check_nonce(anchor) is not None:
+        # 被取代：静默退出，不删新锚
+        return 0
+
+    # pythonw 下没有控制台：先接管 stdout/stderr，避免后续 print 抛异常
+    _redirect_logs(state_dir)
+    print("[SignalLight] drawer hwnd=%d pid=%d" % (args.hwnd, os.getpid()),
+          flush=True)
+
+    # 回填 drawer_pid（不写 .pid 文件）；写前再验一次 nonce
+    current = read_anchor(anchor_file)
+    if current is None or current.nonce != anchor.nonce:
+        return 0
+    write_anchor(anchor_file, Anchor(
+        nonce=anchor.nonce,
+        drawer_pid=os.getpid(),
+        hwnd=anchor.hwnd,
+        owner_pid=anchor.owner_pid,
+        owner_ft=anchor.owner_ft,
+        started=anchor.started,
+    ))
+
+    app = QApplication([sys.argv[0]])
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("traffic-light")
 
-    lifecycle.start_heartbeat(app)
-    lifecycle.setup_signal_handlers(app)
-
-    # UI: 窗口 + 灯面板
     window = TrafficLightWindow(name="SignalLight")
     panel = LightPanel(window)
     panel.setGeometry(0, 0, window.width(), window.height())
 
-    # 状态管理（文件系统轮询 → UI）
-    state_mgr = StateManager(project=args.project)
-    state_mgr.state_changed.connect(panel.set_state)
-    state_mgr.state_changed.connect(window.set_glow_color)
-    state_mgr.project_dir_changed.connect(panel.set_project_name)
-
-    # 终端发现 + 60fps 位置跟踪
-    terminal = TerminalAdapter(args.project, pid_dir)
-    position = PositionEngine(app, window, terminal)
+    # 跟随定位：hwnd 来自命令行，不做终端发现
+    position = PositionEngine(app, window, TerminalAdapter(args.hwnd))
     position.start()
+
+    drawer = _DrawerLoop(app, args.hwnd, guard, anchor_file, state_dir,
+                         window, panel)
+    drawer.start()
 
     try:
         app.exec_()
     except KeyboardInterrupt:
         pass
-    finally:
-        lifecycle.cleanup()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

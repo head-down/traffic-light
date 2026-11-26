@@ -77,6 +77,18 @@ CHASE_INTERVAL = 250
 # 红黄交替警灯（waiting）：每灯停留时间
 ALARM_INTERVAL = 300
 
+# 同窗多会话角标：N>1 才显示
+BADGE_SEPARATOR = "·"
+
+
+def format_badge(count):
+    """角标文字：N>1 显示 "·N"，N<=1 不显示（同窗只有一盏灯的主人）。"""
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        return ""
+    return BADGE_SEPARATOR + str(n) if n > 1 else ""
+
 
 class LightPanel(QWidget):
     """在父窗口内绘制三盏红绿灯"""
@@ -85,6 +97,7 @@ class LightPanel(QWidget):
         super().__init__(parent)
         self._state = "idle"
         self._project_name = ""
+        self._badge = ""
         self._active_radius = LIGHT_RADIUS
         self._idle_radius = LIGHT_RADIUS
         self._current_color = QColor(0, 0, 0, 0)
@@ -211,6 +224,16 @@ class LightPanel(QWidget):
             self._project_name = display_name
             self.update()
 
+    def set_badge(self, count):
+        """同窗聚合的会话数角标（不同 pid 数）；N<=1 时不显示。"""
+        badge = format_badge(count)
+        if badge != self._badge:
+            self._badge = badge
+            self.update()
+
+    def badge_text(self):
+        return self._badge
+
     def _play_pop(self, on_finished=None):
         """18 -> 24(OutQuad) -> 18(OutBack) 切换弹跳"""
         self._pop_group.stop()
@@ -332,16 +355,18 @@ class LightPanel(QWidget):
         w = self.width()
         h = self.height()
 
-        # 项目路径（顶部常驻显示）
-        if self._project_name:
+        # 项目路径 + 同窗角标（顶部常驻显示，不换行）
+        if self._project_name or self._badge:
             display_name = self._shorten_path(self._project_name, w - 24)
+            badge = self._badge
+            pill_text = f"{display_name} {badge}" if display_name and badge else (display_name or badge)
             pfont = QFont(self.parent().font()) if self.parent() else QFont()
             pfont.setPointSize(8)
             pfont.setBold(True)
             painter.setFont(pfont)
 
             fm = painter.fontMetrics()
-            text_w = fm.boundingRect(display_name).width()
+            text_w = fm.boundingRect(pill_text).width()
             pill_x = (w - text_w) // 2 - 8
             pill_y = 5
             pill_w = text_w + 16
@@ -354,9 +379,9 @@ class LightPanel(QWidget):
 
             # 文字阴影 + 主文字
             painter.setPen(QColor(0, 0, 0, 200))
-            painter.drawText(4, 6, w - 8, 16, Qt.AlignHCenter, display_name)
+            painter.drawText(4, 6, w - 8, 16, Qt.AlignHCenter, pill_text)
             painter.setPen(QColor(255, 255, 255, 230))
-            painter.drawText(4, 5, w - 8, 16, Qt.AlignHCenter, display_name)
+            painter.drawText(4, 5, w - 8, 16, Qt.AlignHCenter, pill_text)
 
         centers = [
             w // 2 - SPACING,

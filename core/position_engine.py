@@ -3,6 +3,7 @@
 
 从 traffic_light.py 的 _tick 闭包提取。
 负责：owner 绑定、可见性跟踪、DPI 坐标转换。
+终端 hwnd 由调用方（drawer 参数）提供，引擎不做终端发现。
 
 可见性双保险：
   1. GW_OWNER (SetWindowLongPtrW) — z-order 跟随，终端最小化时自动隐藏
@@ -39,7 +40,7 @@ class PositionEngine:
         self._owner_set = False
         self._hwnd_cache = None
         self._term_visible = False
-        self._first_discovery = True
+        self._first_tick = True
 
         self._timer = QTimer(app)
         self._timer.timeout.connect(self._tick)
@@ -91,16 +92,10 @@ class PositionEngine:
 
     def _tick(self):
         """16ms 高频轮询：owner 绑定 → 可见性 → 位置跟踪"""
-        self._terminal.discover()
-
-        if not self._terminal.found:
-            self._show_at_default()
-            return
-
-        # 首次发现终端：强制标记可见 + 重置 owner
+        # 首次跟踪：强制标记可见 + 重置 owner
         # （匹配 pre-refactor 行为：不查 IsWindowVisible，直接标记可见）
-        if self._first_discovery:
-            self._first_discovery = False
+        if self._first_tick:
+            self._first_tick = False
             self._term_visible = True
             self._owner_set = False
 
@@ -133,18 +128,6 @@ class PositionEngine:
             return
 
         self._position_at_terminal()
-
-    def _show_at_default(self):
-        """未找到终端 → 显示在屏幕右下角"""
-        if not self._window.isVisible():
-            screen = QApplication.primaryScreen()
-            if screen:
-                geom = screen.availableGeometry()
-                self._window.move(
-                    geom.right() - self._window.WIDTH - 20,
-                    geom.bottom() - self._window.HEIGHT - 20,
-                )
-            self._window.show()
 
     def _position_at_terminal(self):
         """根据终端窗口位置 + DPI 计算灯窗口坐标"""
