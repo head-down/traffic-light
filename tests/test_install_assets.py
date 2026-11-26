@@ -177,3 +177,11 @@ def test_readme_has_no_removed_project_feature():
     text = (REPO / "README.md").read_text(encoding="utf-8")
     for stale in ("--project", "auto-bind.sh", "auto-stop.sh", "<YOUR_PROJECT>"):
         assert stale not in text, stale
+
+
+def test_resolver_never_attaches_a_console():
+    """AttachConsole 到 ConPTY 会让 Windows 新建终端窗口（闪一下黑框），禁止使用。"""
+    text = (REPO / "resolve.ps1").read_text(encoding="utf-8")
+    assert "::AttachConsole" not in text
+    assert "::GetConsoleWindow" not in text
+    assert "::FreeConsole" not in text

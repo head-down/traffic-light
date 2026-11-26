@@ -90,7 +90,9 @@ EXE 与源码两种方式都只需配一次 hooks，之后每次打开 CodeBuddy
 
 CodeBuddy 的六个事件统一走 `hooks/traffic-light.sh <event>`，由 GUI 子系统宿主
 （`traffic_light.exe --hook` 或 `pythonw hooks/run-hidden.pyw`）拉起，里面的 bash 用
-`CREATE_NO_WINDOW` 启动，所以**每次事件不会弹控制台黑框**：
+`CREATE_NO_WINDOW` 启动，所以**每次事件不会弹控制台黑框**。窗口来源也只用桌面 API：
+优先当前前台终端窗口，其次桌面上唯一的一个；已有绑定且窗口仍然有效时直接复用——
+不走 `AttachConsole`，因为对 ConPTY 控制台 attach 会让 Windows 临时新建一个终端窗口。
 
 ```
 SessionStart      → 解析会话进程/窗口 → 写绑定 → 抢窗/拉灯 → GC

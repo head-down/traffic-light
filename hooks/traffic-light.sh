@@ -130,11 +130,22 @@ _anchor_stale() {
     [ $(( $(date +%s) - mtime )) -gt $ANCHOR_STALE_SECONDS ]
 }
 
+# 从 bash 直接拉 powershell 会让它新建一个控制台（Windows Terminal 闪黑框），
+# 有 pythonw 时经 run-hidden.pyw --exec 启动，走 CREATE_NO_WINDOW。
+_hidden_exec() {
+    # 注入的桩（测试）要按原样执行，只有真实 powershell 才需要无窗口宿主
+    if [ "$ps_bin" = "powershell" ] && command -v pythonw >/dev/null 2>&1 && [ -f "$script_dir/run-hidden.pyw" ]; then
+        pythonw "$script_dir/run-hidden.pyw" --exec "$@"
+    else
+        "$@"
+    fi
+}
+
 _run_resolve() {
     # GC 只在安装与 SessionStart 跑；prompt 的 TTL/锚自愈重解析不得扫别人的状态目录
     local extra=()
     [ "$event" = "prompt" ] && extra+=("-NoGc")
-    "$ps_bin" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden \
+    _hidden_exec "$ps_bin" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden \
         -File "$(_win_path "$resolve_ps1")" \
         -SessionId "$session_id" \
         -Cwd "$(_win_path "$payload_cwd")" \

@@ -69,9 +69,9 @@ public class TLResolve {
     [DllImport("user32.dll")] public static extern bool GetWindowPlacement(IntPtr h, ref WINDOWPLACEMENT p);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder sb, int n);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
-    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint pid);
-    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    public delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
 }
 "@
 
@@ -110,12 +110,36 @@ function Test-WinBindable([IntPtr]$h) {
     return $true
 }
 
-function Get-ConsoleHwnd([int]$procId) {
-    [TLResolve]::FreeConsole() | Out-Null
-    if (-not [TLResolve]::AttachConsole([uint32]$procId)) { return [IntPtr]::Zero }
-    $h = [TLResolve]::GetConsoleWindow()
-    [TLResolve]::FreeConsole() | Out-Null
-    return $h
+# 终端窗口只能从桌面上找：AttachConsole 到 ConPTY 的控制台会让 Windows 新建
+# 一个终端窗口（用户看到的就是「闪一下黑框」），所以这里完全不碰控制台 API。
+$script:TerminalWindowClasses = @('CASCADIA_HOSTING_WINDOW_CLASS', 'ConsoleWindowClass')
+
+function Test-TerminalWindow([IntPtr]$h) {
+    if ($h -eq [IntPtr]::Zero) { return $false }
+    $w = Get-Win $h
+    if (-not $w) { return $false }
+    return ($script:TerminalWindowClasses -contains $w.Class)
+}
+
+function Get-ForegroundTerminalWindow {
+    # 开会话、提交提示词时终端都在前台；这是唯一不需要控制台 API 的精确来源
+    $fg = [TLResolve]::GetForegroundWindow()
+    if ((Test-TerminalWindow $fg) -and (Test-WinBindable $fg)) { return $fg }
+    return [IntPtr]::Zero
+}
+
+function Get-SoleTerminalWindow {
+    # 兜底：桌面上只有一个终端窗口时不可能认错
+    $script:tlWindows = New-Object System.Collections.ArrayList
+    $cb = [TLResolve+EnumWindowsProc]{
+        param([IntPtr]$h, [IntPtr]$l)
+        if (Test-TerminalWindow $h) { [void]$script:tlWindows.Add($h) }
+        return $true
+    }
+    [TLResolve]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+    $visible = @($script:tlWindows | Where-Object { Test-WinBindable $_ })
+    if ($visible.Count -eq 1) { return $visible[0] }
+    return [IntPtr]::Zero
 }
 
 function Resolve-RealWindow([IntPtr]$h) {
@@ -384,16 +408,25 @@ if (-not $GcOnly) {
     $tryPids = @()
     if ($cbPid -gt 0) { $tryPids += $cbPid }
     foreach ($p in $chain) { if ($tryPids -notcontains $p.Pid) { $tryPids += $p.Pid } }
-    foreach ($ip in $tryPids) {
-        if (-not $byPid.ContainsKey($ip)) { continue }
-        $p = $byPid[$ip]
-        if ($snap.Injected) {
+    if ($snap.Injected) {
+        foreach ($ip in $tryPids) {
+            if (-not $byPid.ContainsKey($ip)) { continue }
             # injected snapshots carry hwnd values directly; no real window exists
-            if ($p.Hwnd -ne 0) { $win = [IntPtr]$p.Hwnd; break }
-            continue
+            if ($byPid[$ip].Hwnd -ne 0) { $win = [IntPtr]$byPid[$ip].Hwnd; break }
         }
-        $cand = Resolve-RealWindow (Get-ConsoleHwnd $ip)
-        if ($cand -ne [IntPtr]::Zero) { $win = $cand; break }
+    } else {
+        # 终端窗口不会变：已有绑定且窗口仍有效就直接复用，避免焦点在别的终端时认错
+        $prevBind = Join-Path $StateDir ($SessionId + '.bind')
+        if (Test-Path -LiteralPath $prevBind) {
+            $prevHwnd = [string](Read-BindFile $prevBind)['hwnd']
+            if ($prevHwnd -match '^[1-9]\d*$' -and (Test-WinBindable ([IntPtr][int64]$prevHwnd))) {
+                $win = [IntPtr][int64]$prevHwnd
+            }
+        }
+        if ($win -eq [IntPtr]::Zero) {
+            $win = Resolve-RealWindow (Get-ForegroundTerminalWindow)
+            if ($win -eq [IntPtr]::Zero) { $win = Resolve-RealWindow (Get-SoleTerminalWindow) }
+        }
     }
 }
 

@@ -22,6 +22,19 @@ def hooks_dir():
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks")
 
 
+def exec_hidden(argv):
+    """用 CREATE_NO_WINDOW 跑任意命令；给 hook 里的 powershell 用。"""
+    if not argv:
+        return 0
+    return subprocess.run(
+        list(argv),
+        stdin=subprocess.DEVNULL if sys.stdin is None else sys.stdin,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=CREATE_NO_WINDOW,
+    ).returncode
+
+
 def run_hook(argv, hooks_path=None):
     """执行 hooks/traffic-light.sh <event...>，返回其退出码。"""
     if not argv:
