@@ -11,6 +11,12 @@ import os
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 STILL_ACTIVE = 259
 
+# FILETIME 的单位是 100ns。creation_ft 有两个来源：CIM/WMI（微秒精度）和
+# GetProcessTimes（精确到 tick），同一个进程两边实测差 4~7 个 tick。精确相等
+# 会把活进程判成「pid 已复用」，所以留 10µs 的转换误差窗口——仍远小于任何
+# 可能的 pid 复用间隔。
+FT_TOLERANCE = 100  # 10µs
+
 _IS_WINDOWS = os.name == "nt"
 _kernel32 = None
 
@@ -37,6 +43,15 @@ def _to_filetime(value):
         return int(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def creation_ft_matches(expected, actual, tolerance=FT_TOLERANCE):
+    """两个 FILETIME 是否指向同一个进程；任一侧缺失按匹配处理（fail-open）。"""
+    exp = _to_filetime(expected)
+    act = _to_filetime(actual)
+    if not exp or not act:
+        return True
+    return abs(exp - act) <= tolerance
 
 
 def process_creation_ft(pid):
@@ -113,6 +128,6 @@ def is_process_alive(pid, creation_ft=None):
                                         ctypes.byref(user)):
             return True
         actual = (created.dwHighDateTime << 32) | created.dwLowDateTime
-        return actual == expected
+        return creation_ft_matches(expected, actual)
     finally:
         kernel32.CloseHandle(handle)

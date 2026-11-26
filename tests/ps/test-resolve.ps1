@@ -267,6 +267,8 @@ function Invoke-Tests {
     Assert-Eq 'creation_ft is untouched' $b['creation_ft'] '900'
     Assert-Eq 'project is refreshed' $b['project'] 'fresh'
     Assert-Eq 'updated is refreshed' ([bool]($b['updated'] -ne '1')) $true
+    $ageSec = [Math]::Abs([int64]$b['updated'] - [int64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+    Assert-True 'updated is a real epoch, not local time dressed as UTC' ($ageSec -lt 300) ('age=' + $ageSec)
 
     # a different resolved pid must not hijack an established identity
     $snap2 = Join-Path $d 'snap2.json'

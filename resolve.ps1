@@ -408,7 +408,9 @@ if ($win -ne [IntPtr]::Zero) {
     if ($ownerPid -gt 0 -and $byPid.ContainsKey($ownerPid)) { $ownerFt = [string]$byPid[$ownerPid].Ft }
 }
 
-$now = [int][double]::Parse((Get-Date -UFormat %s))
+# Get-Date -UFormat %s formats local time as if it were UTC (8h ahead here),
+# which would freeze the 60s bind TTL. Use the real epoch instead.
+$now = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
 # ---- defaults --------------------------------------------------------------
 
@@ -428,6 +430,23 @@ $bindPath = Join-Path $StateDir ($SessionId + '.bind')
 
 # ---- GC --------------------------------------------------------------------
 
+# FILETIME is in 100ns ticks. creation_ft reaches us from two sources: CIM/WMI
+# (microsecond precision) and GetProcessTimes (exact), so the same process
+# differs by a handful of ticks (measured 4-7). Exact equality calls every live
+# session "reused pid" and lets GC delete it, so allow the 10us conversion error
+# - still far smaller than any plausible pid reuse.
+$FT_TOLERANCE = 100
+
+function Test-FtMatch {
+    param([string]$Expected, [string]$Actual)
+    if (-not $Expected -or -not $Actual) { return $true }
+    try {
+        return ([Math]::Abs([int64]$Expected - [int64]$Actual) -le $script:FT_TOLERANCE)
+    } catch {
+        return $false
+    }
+}
+
 function Test-ProcIdentity {
     # Is this pid alive and still the same process? An empty creation_ft means
     # "unknown", which only proves death when the pid itself is gone.
@@ -436,13 +455,13 @@ function Test-ProcIdentity {
     $ip = [int]$PidText
     if ($Snap.Injected) {
         if (-not $ByPid.ContainsKey($ip)) { return $false }
-        if ($FtText -and $ByPid[$ip].Ft -and ([string]$ByPid[$ip].Ft -ne $FtText)) { return $false }
+        if ($FtText -and $ByPid[$ip].Ft -and -not (Test-FtMatch $FtText ([string]$ByPid[$ip].Ft))) { return $false }
         return $true
     }
     $proc = Get-Process -Id $ip -ErrorAction SilentlyContinue
     if (-not $proc) { return $false }
     if ($FtText) {
-        try { if ([string]$proc.StartTime.ToFileTime() -ne $FtText) { return $false } }
+        try { if (-not (Test-FtMatch $FtText ([string]$proc.StartTime.ToFileTime()))) { return $false } }
         catch { return $false }
     }
     return $true

@@ -44,8 +44,23 @@ def test_matching_creation_time_is_alive():
 
 
 def test_mismatched_creation_time_rejects_pid_reuse():
+    # 2 秒之后创建的同号 pid 只能是复用，必须拒绝
     ft = _own_creation_ft()
-    assert process_identity.is_process_alive(os.getpid(), str(ft + 1)) is False
+    assert process_identity.is_process_alive(os.getpid(), str(ft + 20_000_000)) is False
+
+
+def test_sub_millisecond_skew_is_the_same_process():
+    # CIM 只给到毫秒精度，GetProcessTimes 精确到 100ns：同一进程两边会差几个 tick
+    ft = _own_creation_ft()
+    assert process_identity.is_process_alive(os.getpid(), str(ft + 7)) is True
+    assert process_identity.is_process_alive(os.getpid(), str(ft - 7)) is True
+
+
+def test_creation_ft_matches_is_fail_open():
+    assert process_identity.creation_ft_matches("", "1000") is True
+    assert process_identity.creation_ft_matches("1000", "") is True
+    assert process_identity.creation_ft_matches("1000", "1007") is True
+    assert process_identity.creation_ft_matches("1000", "20000000") is False
 
 
 def test_missing_creation_time_treated_as_alive():

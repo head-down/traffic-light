@@ -9,6 +9,8 @@ import sys
 import tempfile
 from dataclasses import dataclass
 
+from core.process_identity import creation_ft_matches
+
 STATE_DIR_NAME = ".traffic-light-states"
 
 # 渲染 tick 与心跳 tick：锚 mtime 每 1000ms 显式刷新一次
@@ -134,7 +136,8 @@ def owner_matches(anchor, observed_pid, observed_ft):
             return False
     except (TypeError, ValueError):
         return True
-    if anchor.owner_ft and observed_ft and str(observed_ft) != anchor.owner_ft:
+    if anchor.owner_ft and observed_ft and not creation_ft_matches(
+            anchor.owner_ft, observed_ft):
         return False
     return True
 

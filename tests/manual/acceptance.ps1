@@ -93,6 +93,16 @@ function Get-FtOf {
     try { return [string]$Process.StartTime.ToFileTime() } catch { return '' }
 }
 
+# creation_ft 有两个来源（CIM/WMI 微秒精度、GetProcessTimes 精确到 tick），
+# 同一进程实测差 4~7 个 tick；精确相等会把活会话报成 PID 复用。
+$script:FT_TOLERANCE = 100  # 10us
+
+function Test-FtMatch {
+    param([string]$Expected, [string]$Actual)
+    if (-not $Expected -or -not $Actual) { return $true }
+    try { return ([Math]::Abs([int64]$Expected - [int64]$Actual) -le $script:FT_TOLERANCE) } catch { return $false }
+}
+
 function Read-TaskNames {
     param([string]$Path)
     $names = @()
@@ -223,7 +233,7 @@ if ($binds.Count -eq 0) {
         }
         $expectedFt = [string]$fields['creation_ft']
         $actualFt = Get-FtOf $proc
-        if ($expectedFt -and $actualFt -and $expectedFt -ne $actualFt) {
+        if (-not (Test-FtMatch $expectedFt $actualFt)) {
             Set-Row 'bind' $item.Name 'FAIL' ('pid=' + $procId + ' creation_ft mismatch -> PID reused')
             continue
         }
@@ -258,7 +268,7 @@ if ($states.Count -eq 0) {
             continue
         }
         $actualFt = Get-FtOf $proc
-        if ($ft -and $actualFt -and $ft -ne $actualFt) {
+        if (-not (Test-FtMatch $ft $actualFt)) {
             Set-Row 'state' $item.Name 'FAIL' ('pid=' + $procId + ' creation_ft mismatch -> PID reused')
             continue
         }

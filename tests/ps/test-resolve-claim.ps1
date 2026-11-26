@@ -324,6 +324,32 @@ function Invoke-Tests {
     $acts2 = @()
     try { $acts2 = @(($r.Text | ConvertFrom-Json).gc) } catch { $acts2 = @() }
     Assert-Eq 'GC is idempotent' ($acts2 -join ',') ''
+
+    # ---------------------------------------------------------------- E2 ----
+    Write-Output 'E2  identity: a few FILETIME ticks are the same process, seconds are not'
+    $d2 = New-Case 'e2'
+    $state2 = Join-Path $d2 'state'
+    [void](New-Item -ItemType Directory -Path $state2 -Force)
+    $noTasks = Join-Path $d2 'tasks.json'
+    '[]' | Set-Content -LiteralPath $noTasks -Encoding UTF8
+    $livePid = $PID
+    $liveFt = (Get-Process -Id $livePid).StartTime.ToFileTime()
+    $stateFile = Join-Path $state2 ([string]$livePid + '.state')
+
+    # CIM only reports millisecond precision while GetProcessTimes is exact:
+    # the same process legitimately differs by a handful of ticks.
+    Set-Content -LiteralPath $stateFile -Value @('thinking', 'D:/work/proj', [string]($liveFt + 7)) -Encoding UTF8
+    $r = Invoke-Resolver @('-StateDir', $state2, '-GcOnly', '-DryRun', '-TasksFile', $noTasks)
+    $skewActs = @()
+    try { $skewActs = @(($r.Text | ConvertFrom-Json).gc) } catch { $skewActs = @() }
+    Assert-True 'state with a few ticks of skew is kept' (-not ($skewActs -contains ('file:' + $livePid + '.state'))) ($skewActs -join ',')
+
+    # Two seconds later can only be a reused pid.
+    Set-Content -LiteralPath $stateFile -Value @('thinking', 'D:/work/proj', [string]($liveFt + 20000000)) -Encoding UTF8
+    $r = Invoke-Resolver @('-StateDir', $state2, '-GcOnly', '-DryRun', '-TasksFile', $noTasks)
+    $reuseActs = @()
+    try { $reuseActs = @(($r.Text | ConvertFrom-Json).gc) } catch { $reuseActs = @() }
+    Assert-True 'state with a 2s skew is treated as pid reuse' ($reuseActs -contains ('file:' + $livePid + '.state')) ($reuseActs -join ',')
 }
 
 try {

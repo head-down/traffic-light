@@ -74,3 +74,28 @@ def test_acceptance_doc_covers_the_four_checks():
                    "probe.ps1 -Verdict", "acceptance.ps1",
                    "taskkill /F", "/clear"):
         assert needle in text, "验收文档缺少：%s" % needle
+
+@requires_windows
+def test_acceptance_tolerates_sub_microsecond_creation_ft_skew(tmp_path):
+    """creation_ft 来自 CIM 时与 GetProcessTimes 差几个 tick，不能报 PID 复用。"""
+    from core.process_identity import process_creation_ft
+
+    ft = process_creation_ft(os.getpid())
+    assert ft, "拿不到自身 creation_ft"
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / f"{os.getpid()}.state").write_text(
+        "thinking\n%s\n%d\n" % (tmp_path, int(ft) + 7), encoding="utf-8")
+    (state / "live.bind").write_text(
+        "session_id=live\npid=%d\ncreation_ft=%d\nhwnd=0\n"
+        "hwnd_owner_pid=0\nhwnd_owner_ft=\nproject=proj\ncwd=%s\n"
+        "updated=0\ndegraded=1\n" % (os.getpid(), int(ft) + 7, tmp_path),
+        encoding="utf-8")
+    tasks = tmp_path / "tasks.json"
+    tasks.write_text("[]", encoding="utf-8")
+
+    script = REPO / "tests" / "manual" / "acceptance.ps1"
+    result = _run_ps(script, "-StateDir", state, "-TasksFile", tasks)
+    assert result.returncode == 0
+    assert "fail=0" in result.stdout, result.stdout

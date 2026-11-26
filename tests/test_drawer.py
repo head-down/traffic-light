@@ -12,11 +12,23 @@ from core.drawer import (
     Anchor,
     DrawerGuard,
     anchor_path,
+    owner_matches,
     read_anchor,
     write_anchor,
 )
 from core.light_panel import format_badge
 from core.session_view import Bind, InMemorySources, SessionView, StateEntry
+
+
+def test_owner_matches_tolerates_millisecond_precision_skew():
+    # 锚里的 owner_ft 来自 CIM（毫秒精度），观测值来自 GetProcessTimes（精确），
+    # 同一进程会差几个 tick，不能当成换了窗口。
+    assert owner_matches(_anchor(owner_pid=42, owner_ft="1000"), 42, "1007") is True
+
+
+def test_owner_matches_rejects_a_reused_pid():
+    assert owner_matches(_anchor(owner_pid=42, owner_ft="1000"), 42,
+                         "20000000") is False
 
 
 def _anchor(nonce="abc", hwnd=100, owner_pid=42, owner_ft="111",
@@ -94,8 +106,8 @@ def test_owner_pid_mismatch_exits():
 
 def test_owner_creation_time_mismatch_exits():
     guard = DrawerGuard(nonce="abc")
-    decision = guard.check(_anchor(owner_pid=42, owner_ft="111"),
-                           owner=(42, "999"), live_count=1)
+    decision = guard.check(_anchor(owner_pid=42, owner_ft="100000000000000000"),
+                           owner=(42, "100020000000000000"), live_count=1)
     assert decision is not None
     assert decision.reason == EXIT_OWNER
 
