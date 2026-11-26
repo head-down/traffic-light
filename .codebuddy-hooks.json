@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/bind.sh --project <YOUR_PROJECT> && LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh idle"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh session-start"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh thinking"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh prompt"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh running"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh tool"
           }
         ]
       }
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh waiting"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh notify"
           }
         ]
       }
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh success"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh stop"
           }
         ]
       }
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/auto-stop.sh"
+            "command": "LC_ALL=C.UTF-8 bash --noprofile --norc TRAFFIC_LIGHT_DIR/hooks/traffic-light.sh end"
           }
         ]
       }
