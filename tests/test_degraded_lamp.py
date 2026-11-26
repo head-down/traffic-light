@@ -13,6 +13,7 @@ from core.drawer import (
     Anchor,
     DrawerGuard,
     anchor_path,
+    badge_count,
     degraded_beat,
     degraded_label,
     read_anchor,
@@ -182,3 +183,28 @@ def test_window_view_unaffected_by_degraded_bind():
     degraded = _view(binds, states, degraded=True)
     assert degraded.count == 1
     assert degraded.label == "beta"
+
+
+# ============================================================
+# 角标：窗口灯才显示 ·N，降级灯不显示
+# ============================================================
+
+def test_degraded_lamp_never_draws_a_badge():
+    snapshot = _view(
+        [_bind(1, "alpha"), _bind(2, "beta")],
+        [_state(1), _state(2)],
+    )
+    assert snapshot.count == 2
+    assert badge_count(snapshot, degraded=True) == 0
+
+
+def test_window_lamp_badge_counts_distinct_sessions():
+    snapshot = _view(
+        [_bind(1, "alpha", hwnd=100, degraded=False),
+         _bind(2, "beta", hwnd=100, degraded=False)],
+        [_state(1), _state(2)],
+        hwnd=100,
+        degraded=False,
+    )
+    assert snapshot.count == 2
+    assert badge_count(snapshot, degraded=False) == 2

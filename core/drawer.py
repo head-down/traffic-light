@@ -195,3 +195,10 @@ def degraded_beat(guard, anchor, live_count):
     """降级灯心跳：没有可跟随的窗口与 owner，只按降级会话数判自灭。"""
     return guard.check(anchor, window_alive=True, owner=None,
                        live_count=live_count)
+
+
+def badge_count(view, degraded=False):
+    """角标数字：窗口灯数不同会话；降级灯是全机一盏，不画 ·N。"""
+    if degraded or view is None:
+        return 0
+    return view.count

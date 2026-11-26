@@ -57,6 +57,7 @@ from core.drawer import (
     Anchor,
     DrawerGuard,
     anchor_path,
+    badge_count,
     degraded_beat,
     degraded_label,
     derive_state_dir,
@@ -139,7 +140,7 @@ class _DrawerLoop:
             self._panel.set_project_name(degraded_label(view))
         else:
             self._panel.set_project_name(view.label)
-        self._panel.set_badge(view.count)
+        self._panel.set_badge(badge_count(view, self._degraded))
         self._window.set_glow_color(view.state)
 
     def _beat(self):

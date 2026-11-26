@@ -85,12 +85,52 @@ def _filter_valid_windows(windows):
 # 窗口工具函数
 # ============================================================
 
+def _read_placement(hwnd):
+    """一次 GetWindowPlacement，返回 (还原矩形, showCmd)；失败返回 None。"""
+    placement = WINDOWPLACEMENT()
+    placement.length = ctypes.sizeof(WINDOWPLACEMENT)
+    if not user32.GetWindowPlacement(hwnd, ctypes.byref(placement)):
+        return None
+    normal = placement.rcNormalPosition
+    return ((normal.left, normal.top, normal.right, normal.bottom),
+            int(placement.showCmd))
+
+
+def get_window_placement(hwnd):
+    """窗口的还原矩形与 showCmd；调用失败返回 (None, 0)。"""
+    result = _read_placement(hwnd)
+    if result is None:
+        return None, 0
+    return result
+
+
+def choose_window_rect(visible, restore, iconic=False):
+    """在真实可见矩形与还原矩形之间选择。
+
+    最小化的窗口只有 159x27 的桩尺寸，IsIconic 或尺寸异常时一律用还原
+    矩形；正常/最大化窗口必须用真实矩形，否则灯会贴到旧的还原位置。
+    """
+    if restore is None:
+        return visible
+    if iconic or visible is None:
+        return restore
+    left, top, right, bottom = visible
+    if right - left < MIN_WINDOW_WIDTH or bottom - top < MIN_WINDOW_HEIGHT:
+        return restore
+    return visible
+
+
 def get_window_rect(hwnd):
-    """获取窗口屏幕坐标，返回 (left, top, right, bottom)。
-    用 GetWindowRect（逻辑坐标），与 SetWindowPos 坐标系统一致。"""
+    """获取可用的窗口矩形，返回 (left, top, right, bottom)。
+
+    GetWindowRect（逻辑坐标，与 SetWindowPos 一致）优先；最小化或桩尺寸时
+    退回 GetWindowPlacement 的还原矩形。
+    """
     rect = wintypes.RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(rect))
-    return rect.left, rect.top, rect.right, rect.bottom
+    visible = (rect.left, rect.top, rect.right, rect.bottom)
+    restore, _ = get_window_placement(hwnd)
+    return choose_window_rect(visible, restore, iconic=bool(user32.IsIconic(hwnd)))
 
 
 def is_window_visible_and_normal(hwnd):
