@@ -4,11 +4,16 @@
 
 用法:
     python traffic_light.py --hwnd <十进制> [--nonce <hex>]
+    python traffic_light.py --degraded [--hwnd 0] [--nonce <hex>]
 
 由解析器写好锚（.traffic-light-states/w<hwnd>.win）后拉起；drawer 只读
 本窗绑定聚合渲染，每 1000ms 刷新锚 mtime 作为心跳，窗口失效 / owner
 （pid + 创建时间）不匹配 / 本窗零活 pid 连续 3 次心跳 / nonce 被替换时
 注销自己并退出。
+
+--degraded 与 --hwnd 0 等价：全机一盏降级灯（锚 w0.win / 任务
+traffic-light-w0），聚合所有 degraded=1 的绑定并标 <project> ?；
+不绑定 owner、不跟随窗口，连续 3 次心跳无降级会话即自灭。
 
 状态目录由自身位置推导（源码版 = 脚本目录，frozen = EXE 目录），命令行
 只传 hwnd 与 nonce（schtasks /TR 有 261 字符上限）。不写 .pid 文件，
@@ -52,6 +57,8 @@ from core.drawer import (
     Anchor,
     DrawerGuard,
     anchor_path,
+    degraded_beat,
+    degraded_label,
     derive_state_dir,
     read_anchor,
     touch_anchor,
@@ -95,14 +102,19 @@ class _DrawerLoop:
     """渲染 tick（300ms）+ 心跳 tick（1000ms）。"""
 
     def __init__(self, app, hwnd, guard, anchor_file, state_dir,
-                 window, panel):
+                 window, panel, degraded=False):
         self._app = app
         self._hwnd = hwnd
         self._guard = guard
         self._anchor_file = anchor_file
         self._window = window
         self._panel = panel
-        self._view = SessionView(FileSystemSources(state_dir), hwnd=hwnd)
+        self._degraded = degraded
+        if degraded:
+            self._view = SessionView(FileSystemSources(state_dir),
+                                     degraded=True)
+        else:
+            self._view = SessionView(FileSystemSources(state_dir), hwnd=hwnd)
         self._live_count = 0
         self._stopped = False
 
@@ -123,19 +135,26 @@ class _DrawerLoop:
         view = self._view.snapshot()
         self._live_count = view.count
         self._panel.set_state(view.state)
-        self._panel.set_project_name(view.label)
+        if self._degraded:
+            self._panel.set_project_name(degraded_label(view))
+        else:
+            self._panel.set_project_name(view.label)
         self._panel.set_badge(view.count)
         self._window.set_glow_color(view.state)
 
     def _beat(self):
         # 先验 nonce，再刷 mtime：被取代的 drawer 不能替新锚续命
         anchor = read_anchor(self._anchor_file)
-        decision = self._guard.check(
-            anchor,
-            window_alive=is_window(self._hwnd),
-            owner=get_window_owner(self._hwnd),
-            live_count=self._live_count,
-        )
+        if self._degraded:
+            # 降级灯没有窗口与 owner 可校验，只按降级会话数判自灭
+            decision = degraded_beat(self._guard, anchor, self._live_count)
+        else:
+            decision = self._guard.check(
+                anchor,
+                window_alive=is_window(self._hwnd),
+                owner=get_window_owner(self._hwnd),
+                live_count=self._live_count,
+            )
         if decision is None:
             touch_anchor(self._anchor_file)
             return
@@ -161,14 +180,21 @@ class _DrawerLoop:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="一窗一灯的 drawer")
-    parser.add_argument("--hwnd", type=int, required=True,
-                        help="终端窗口句柄（十进制）")
+    parser.add_argument("--hwnd", type=int, default=None,
+                        help="终端窗口句柄（十进制）；0 与 --degraded 等价")
+    parser.add_argument("--degraded", action="store_true",
+                        help="降级灯：全机一盏，锚 w0.win")
     parser.add_argument("--nonce", type=str, default="",
                         help="锚文件实例 nonce；不传则不校验")
     args = parser.parse_args(argv)
 
+    if args.hwnd is None and not args.degraded:
+        parser.error("需要 --hwnd 或 --degraded")
+    degraded = args.degraded or args.hwnd == 0
+    hwnd = 0 if degraded else args.hwnd
+
     state_dir = derive_state_dir()
-    anchor_file = anchor_path(state_dir, args.hwnd)
+    anchor_file = anchor_path(state_dir, hwnd)
     anchor = read_anchor(anchor_file)
     if anchor is None:
         # 没有锚就没有要渲染的窗口，也绝不自己造锚
@@ -181,8 +207,8 @@ def main(argv=None):
 
     # pythonw 下没有控制台：先接管 stdout/stderr，避免后续 print 抛异常
     _redirect_logs(state_dir)
-    print("[SignalLight] drawer hwnd=%d pid=%d" % (args.hwnd, os.getpid()),
-          flush=True)
+    print("[SignalLight] drawer hwnd=%d pid=%d degraded=%d"
+          % (hwnd, os.getpid(), 1 if degraded else 0), flush=True)
 
     # 回填 drawer_pid（不写 .pid 文件）；写前再验一次 nonce
     current = read_anchor(anchor_file)
@@ -205,12 +231,17 @@ def main(argv=None):
     panel = LightPanel(window)
     panel.setGeometry(0, 0, window.width(), window.height())
 
-    # 跟随定位：hwnd 来自命令行，不做终端发现
-    position = PositionEngine(app, window, TerminalAdapter(args.hwnd))
-    position.start()
+    if degraded:
+        # 降级灯不跟随任何窗口：自由置顶、不抢焦点
+        window.enable_free_floating()
+        window.show()
+    else:
+        # 跟随定位：hwnd 来自命令行，不做终端发现
+        position = PositionEngine(app, window, TerminalAdapter(hwnd))
+        position.start()
 
-    drawer = _DrawerLoop(app, args.hwnd, guard, anchor_file, state_dir,
-                         window, panel)
+    drawer = _DrawerLoop(app, hwnd, guard, anchor_file, state_dir,
+                         window, panel, degraded=degraded)
     drawer.start()
 
     try:
