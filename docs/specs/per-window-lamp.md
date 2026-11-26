@@ -66,7 +66,8 @@
 ### 解析（唯一真相）
 
 - 新的 PowerShell 解析器是 hwnd 的唯一来源；Python 侧不再自行发现终端，只看锚/绑定里传入的 hwnd。
-- 父链只用于认"我是哪个 codebuddy 进程"（node.exe 且命令行含 codebuddy，排除 conpty/node-pty 类瞬时进程），必须一次 CIM 全量快照在内存里走完，不做逐层查询。
+- **认进程优先走服务代理端口**：hook 进程继承 `CODEBUDDY_SERVICE_PROXY_URL`（形如 `http://127.0.0.1:<port>/internal/hooks/...`），该端口由本会话自己的 CodeBuddy 主进程独占监听。取端口 → 反查监听它的进程 → 得 pid + 创建时间。实测本机三个活会话 1:1 对应：54894→17324、59553→7628、54163→32424，与 `bind.sh` 用同一路径写入的 `.cbpid` 完全一致。端口缺失、无监听、查不到 owner 三种情况才退回父链快照；两种情况都拿不到就 fail-closed 写 `degraded=1`，不猜。
+- 父链只用于认"我是哪个 codebuddy 进程"（node.exe 且命令行含 codebuddy，排除 conpty/node-pty 类瞬时进程），必须一次 CIM 全量快照在内存里走完，不做逐层查询。（node.exe 且命令行含 codebuddy，排除 conpty/node-pty 类瞬时进程），必须一次 CIM 全量快照在内存里走完，不做逐层查询。
 - hwnd 必须靠 attach-console 获取：短命解析进程内 `FreeConsole → AttachConsole(目标 pid) → GetConsoleWindow`；若得到 `PseudoConsoleWindow` 或零尺寸，取 `GW_OWNER`；再用 `IsWindow + IsWindowVisible + rect ≥ 50×50` 验收。探针实测该路径在 Windows Terminal（ConPTY）下有效，父链上溯拿不到窗口。
 - attach 只在短命解析进程里发生，drawer 永不 attach（它没有控制台，attach 会挂上一个甚至闪窗）。
 - 解析失败不静默：写 `degraded=1` 的绑定（pid 仍可用），进入降级灯。
