@@ -2,7 +2,6 @@ param(
     [string]$TemplatePath,
     [string]$OutputPath,
     [string]$SignalLightDir,
-    [string]$ProjectName,
     [switch]$Global
 )
 
@@ -10,30 +9,29 @@ param(
 # SignalLight Hook 合并脚本
 # 将模板 hooks 合并到已有的 settings，保留其他配置
 #
-# 项目级安装（默认）:
-#   powershell -NoProfile -File merge-hooks.ps1 `
-#       -TemplatePath ".codebuddy-hooks.json" `
-#       -OutputPath "D:\project\.codebuddy\settings.local.json" `
-#       -SignalLightDir "D:\tools\SignalLight" `
-#       -ProjectName "my-project"
+# 模板只含 TRAFFIC_LIGHT_DIR 一个占位符；一窗一灯按会话 pid /
+# 窗口 hwnd 做键，不再有项目名占位符，也没有项目级 hook。
 #
 # 全局安装:
-#   powershell -NoProfile -File merge-hooks.ps1 `
+#   powershell -NoProfile -ExecutionPolicy Bypass -File merge-hooks.ps1 `
 #       -TemplatePath ".codebuddy-hooks.json" `
 #       -SignalLightDir "D:\tools\SignalLight" `
 #       -Global
+#
+# 项目级安装:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File merge-hooks.ps1 `
+#       -TemplatePath ".codebuddy-hooks.json" `
+#       -OutputPath "D:\project\.codebuddy\settings.local.json" `
+#       -SignalLightDir "D:\tools\SignalLight"
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 
 # ---- 全局模式处理 ----
 if ($Global) {
-    # 全局安装输出到 ~/.codebuddy/settings.json
     if (-not $OutputPath) {
         $OutputPath = Join-Path $env:USERPROFILE ".codebuddy\settings.json"
     }
-    # 全局模式下不传 ProjectName（auto-bind.sh 会从环境变量自动检测）
-    $ProjectName = ""
     Write-Output "[Global mode] output = $OutputPath"
 }
 
@@ -53,12 +51,6 @@ $SignalLightDir = $SignalLightDir.TrimEnd('\')
 $unixDir = "/" + ($SignalLightDir[0].ToString().ToLower()) + ($SignalLightDir.Substring(2) -replace '\\', '/')
 $templateRaw = $templateRaw -replace [regex]::Escape("TRAFFIC_LIGHT_DIR"), $unixDir
 
-if ($Global) {
-    # 全局模式：用 auto-bind.sh（自动检测项目名）替换 bind.sh --project <YOUR_PROJECT>
-    $templateRaw = $templateRaw -replace [regex]::Escape("bind.sh --project <YOUR_PROJECT>"), "auto-bind.sh"
-} else {
-    $templateRaw = $templateRaw -replace [regex]::Escape("<YOUR_PROJECT>"), $ProjectName
-}
 $template = $templateRaw | ConvertFrom-Json
 
 # ---- 2. 读取已有配置 ----
@@ -78,13 +70,13 @@ if (Test-Path $OutputPath) {
 # ---- 3. 检查是否有 SignalLight hooks 已存在 ----
 $alreadyInstalled = $false
 if (-not $isNew -and (Get-Member -InputObject $existing -Name "hooks" -MemberType NoteProperty -ErrorAction SilentlyContinue)) {
-    # 检查是否已经有 SignalLight 的 hook（以 SessionStart 中的 bind.sh 为标志）
+    # 以 SessionStart 中的 traffic-light.sh 为标志
     $existingHooks = $existing.hooks
     if ($existingHooks.SessionStart) {
-        foreach ($hookGroup in $existingHooks.SessionStart) {
+        foreach ($hookGroup in @($existingHooks.SessionStart)) {
             if ($hookGroup.hooks) {
                 foreach ($h in $hookGroup.hooks) {
-                    if ($h.command -match "bind\.sh.*--project") {
+                    if ($h.command -match 'traffic-light\.sh') {
                         $alreadyInstalled = $true
                         break
                     }
@@ -97,7 +89,7 @@ if (-not $isNew -and (Get-Member -InputObject $existing -Name "hooks" -MemberTyp
 # ---- 去重辅助 ----
 function Test-CommandExists {
     param($ExistingHookGroups, $NewCommand)
-    foreach ($group in $ExistingHookGroups) {
+    foreach ($group in @($ExistingHookGroups)) {
         if ($group.hooks) {
             foreach ($h in $group.hooks) {
                 if ($h.command -and $h.command -match [regex]::Escape($NewCommand)) {
@@ -107,6 +99,25 @@ function Test-CommandExists {
         }
     }
     return $false
+}
+
+# 旧版本的 hook 入口已随本次升级删除，留着只会在每次事件报错
+function Remove-LegacyHooks {
+    param($ExistingHookGroups)
+    $kept = @()
+    foreach ($group in @($ExistingHookGroups)) {
+        $legacy = $false
+        if ($group.hooks) {
+            foreach ($h in $group.hooks) {
+                if ($h.command -and $h.command -match 'auto-(bind|stop)\.sh') {
+                    $legacy = $true
+                    break
+                }
+            }
+        }
+        if (-not $legacy) { $kept += $group }
+    }
+    return $kept
 }
 
 # ---- 4. 合并 hooks ----
@@ -121,28 +132,21 @@ if (-not (Get-Member -InputObject $existing -Name "hooks" -MemberType NoteProper
 
 foreach ($hookEvent in $template.hooks.PSObject.Properties) {
     $eventName = $hookEvent.Name
-    $newHookGroups = $hookEvent.Value
+    $newHookGroups = @($hookEvent.Value)
 
     # CodeBuddy 的 hooks 结构: { "<eventName>": [ { "matcher": "...", "hooks": [...] }, ... ] }
     # 追加 SignalLight 的 hook group，保留用户已有的同事件 hooks
     try {
-        $existingHooks = $existing.hooks
-        if ($existingHooks.$eventName) {
-            # 已存在：检查命令去重，只追加新命令
-            $existingArray = @($existingHooks.$eventName)
+        if ($existing.hooks.$eventName) {
+            $existingArray = @(Remove-LegacyHooks @($existing.hooks.$eventName))
             $newToAdd = @()
 
-            foreach ($newGroup in @($newHookGroups)) {
-                # 检查整个 hook group 的 command 是否已存在
+            foreach ($newGroup in $newHookGroups) {
                 $allCommandsExist = $true
                 if ($newGroup.hooks) {
                     foreach ($h in $newGroup.hooks) {
-                        if ($h.command) {
-                            # 用核心可执行文件名去重（如 "auto-bind.sh"、"auto-stop.sh"、"traffic-light.sh"）
-                            $cmdKey = if ($h.command -match '([\w.\-]+\.sh)') { $Matches[1] } else { $h.command }
-                            if (-not (Test-CommandExists $existingArray $cmdKey)) {
-                                $allCommandsExist = $false
-                            }
+                        if ($h.command -and -not (Test-CommandExists $existingArray $h.command)) {
+                            $allCommandsExist = $false
                         }
                     }
                 }
@@ -152,14 +156,14 @@ foreach ($hookEvent in $template.hooks.PSObject.Properties) {
             }
 
             if ($newToAdd.Count -gt 0) {
-                $existingHooks.$eventName = $existingArray + $newToAdd
+                $existing.hooks.$eventName = $existingArray + $newToAdd
                 $updated += $eventName
             } else {
+                $existing.hooks.$eventName = $existingArray
                 $skipped += $eventName
             }
         } else {
-            # 不存在：新建
-            $existingHooks | Add-Member -MemberType NoteProperty -Name $eventName -Value $newHookGroups
+            $existing.hooks | Add-Member -MemberType NoteProperty -Name $eventName -Value $newHookGroups
             $added += $eventName
         }
     } catch {
@@ -174,11 +178,10 @@ if (-not (Test-Path $outputDir)) {
     New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 }
 
-$json = $existing | ConvertTo-Json -Depth 6
+$json = $existing | ConvertTo-Json -Depth 8
 Set-Content -Path $OutputPath -Value $json -Encoding UTF8 -NoNewline
 
 # ---- 6. 输出安装报告 ----
-$total = ($skipped + $updated + $added).Count
 if ($alreadyInstalled) {
     Write-Output "SIGNALLIGHT_ALREADY_INSTALLED"
 } else {

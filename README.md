@@ -8,29 +8,35 @@
 
 PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy / CLI agent 的运行状态。
 
-守护进程模式，单灯聚合多会话，6 种状态霓虹发光动画。
+**一个终端窗口一盏灯**：灯贴在该窗口下方，只反映这个窗口里的会话；同项目开多个终端互不干扰，关掉一个不影响另一个。
 
 ```
 ┌──────────────────┐
-│       mine       │   项目目录名（顶部常驻）
+│       mine       │   主标签：优先级最高会话的项目名
 │  ●      ●      ● │   红灯：失败（双闪）
 │  🔴     🟡     🟢 │   黄灯：运行中（呼吸）
-│   SignalLight    │   绿灯：成功（脉冲）
+│   SignalLight ·2 │   角标 ·N：本窗不同会话数（N=1 不显示）
 │     THINKING     │   蓝绿霓虹跑马灯：思考中
-│                  │   红黄交替警灯：等待用户确认
-└──────────────────┘   三灯暗色呼吸：空闲
-
-窗口尺寸：240 x 165 px，项目路径置顶常驻，
-状态标签置底，互不遮挡。
+└──────────────────┘   红黄交替警灯：等待用户确认
+                       三灯暗色呼吸：空闲
 ```
 
-## 星标趋势
+窗口尺寸 240 x 165 px。灯不抢焦点、不点亮任务栏图标；终端最小化时灯隐藏，还原时灯回来。
 
-[![Star History Chart](https://api.star-history.com/svg?repos=head-down/traffic-light&type=Date)](https://star-history.com/#head-down/traffic-light&Date)
+## 支持矩阵
+
+| 终端 | 支持 | 行为 |
+|------|------|------|
+| Windows Terminal（ConPTY） | ✅ | 一窗一灯，标签页合并为 `·N` |
+| 经典控制台 conhost | ✅ | 一窗一灯 |
+| Git Bash / mintty | ❌ | 解析不到窗口 → 机器级**降级灯**，标 `?` |
+| VSCode 集成终端 | ❌ | 解析不到窗口 → 机器级**降级灯**，标 `?` |
+
+> 不支持 ≠ 没有灯。任何解析不出窗口的会话都落到一台机器一个的降级灯上，标签为 `<项目> ?`；会话恢复可解析后，降级灯自动消失。降级灯自由置顶、不抢焦点。
+>
+> 同一个窗口里的多个标签页共享窗口句柄，物理上只有一块屏，因此合并成一盏灯并显示 `·N`（N = 不同会话数）。Windows Terminal 把标签页拖成新窗口后，灯在下一条提示时跟到新窗口。
 
 ## 下载
-
-两种使用方式：
 
 | 方式 | 适合 | 要求 |
 |------|------|------|
@@ -41,17 +47,15 @@ PyQt5 透明置顶悬浮窗，通过**文件系统轮询**聚合展示 CodeBuddy
 
 从 [GitHub Releases](https://github.com/head-down/traffic-light/releases) 下载 `SignalLight-v1.0.0.zip`，解压后运行安装脚本：
 
-```bash
-# 全局安装（推荐）—— 一次安装，所有项目生效
+```bat
+:: 全局安装（推荐）—— 一次安装，所有项目生效
 install.bat --global
 
-# 或项目级安装 —— 只对某个项目生效
-install.bat <你的项目路径>
+:: 或项目级安装 —— 只对某个项目生效
+install.bat D:\DevelopTools\my-project
 ```
 
-脚本自动配置 CodeBuddy hooks，配置完成后打开项目终端即可看到红绿灯。
-
-EXE 发布版包含所有依赖，无需安装 Python。
+发布包已包含 `resolve.ps1`、`probe.ps1`、`hooks/` 与 hook 模板，不需要安装 Python，也不需要额外下载脚本。
 
 ### 源码版
 
@@ -59,69 +63,57 @@ EXE 发布版包含所有依赖，无需安装 Python。
 git clone https://github.com/head-down/traffic-light.git
 cd traffic-light
 pip install -r requirements.txt
+
+# 全局安装（推荐）或项目级安装
+bash install.sh --global
+# bash install.sh /d/DevelopTools/my-project
 ```
+
+安装 = 把 hooks 合并进 settings + 跑一次 GC。配置完成后打开 CodeBuddy 终端，每个终端窗口自动出现自己的灯。
+
+## 升级（破坏式）
+
+本次升级不保留项目级键，也没有新旧并存：
+
+- 旧计划任务 `traffic-light-<项目>` 会被删除；新格式 `traffic-light-w<hwnd>` 是否存活只看锚文件。
+- 旧状态文件 `.state`（后缀非纯数字）、`.pid`、`.cbpid` 一律清理。
+- 旧版两个 hook 入口已删除，重新安装时对应 hook 会被替换为统一的 `hooks/traffic-light.sh`。
+- `.win` 锚超过阈值未刷新视为孤儿灯，一并删除。
+
+GC 在安装脚本与每次 SessionStart 各跑一次，幂等，旧任务 / 状态文件 / 孤儿锚**自动清理**，无需手工干预。重复安装/升级只会更新 hooks，不会出现第二盏灯。
 
 ## 快速开始
 
-### EXE 发布版（无需 Python）
-
-```bash
-# 1. 下载并解压 SignalLight-v1.0.0.zip
-# 2. 运行一键安装脚本
-
-# 全局安装（推荐）—— 所有项目生效
-install.bat --global
-
-# 或项目级安装
-install.bat D:\DevelopTools\my-project
-
-# 3. 打开任意 CodeBuddy 项目 → 灯自动出现
-```
-
-### 源码版（开发者）
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/head-down/traffic-light.git
-cd traffic-light
-pip install -r requirements.txt
-
-# 2. 全局安装（推荐）或项目级安装
-bash install.sh --global
-# bash install.sh /d/DevelopTools/my-project
-
-# 3. 打开任意 CodeBuddy 项目 → 灯自动出现
-```
-
-两种方式只需配一次 hooks，之后每次打开 CodeBuddy 终端，灯自动出现在右下角，`/exit` 时自动关闭。
+EXE 与源码两种方式都只需配一次 hooks，之后每次打开 CodeBuddy 终端，灯自动出现在该终端窗口下方。
 
 ### 自动启动机制
 
-CodeBuddy 启动/退出时通过 hooks 自动管理守护进程生命周期：
+CodeBuddy 的六个事件统一走 `hooks/traffic-light.sh <event>`：
 
 ```
-SessionStart → auto-bind.sh → bind.sh → 启动守护进程（记录 PID + cbpid）
-SessionEnd   → auto-stop.sh → 清理状态文件 + 杀死守护进程
+SessionStart      → 解析会话进程/窗口 → 写绑定 → 抢窗/拉灯 → GC
+UserPromptSubmit  → thinking（顺带 TTL 检查与自愈）
+PostToolUse       → running / failure（只写状态，零额外进程）
+Notification      → waiting（仅 permission_prompt）
+Stop              → success
+SessionEnd        → ended（不删文件、不杀灯）
 ```
 
-**全局安装**下，`auto-bind.sh` 自动从 `$CODEBUDDY_PROJECT_DIR` 提取项目名（无需硬编码），所有项目统一由全局 hook 管理。同一项目的多个 CodeBuddy 窗口共用一个守护进程，状态文件以 last-write-wins 聚合。
+- **身份层**键 = CodeBuddy 进程 PID，值 = `<pid>.state`；PID 复用靠进程创建时间识别。
+- **绑定层**键 = `session_id`，值 = `<session_id>.bind`，记录 pid / 窗口句柄 / 项目标签。
+- **显示层**键 = 窗口句柄 hwnd，值 = `w<hwnd>.win` 锚 + `traffic-light-w<hwnd>` 计划任务 + 一个 drawer 进程。一个 hwnd 恒等于一盏灯。
 
-不需要手动启动 `bind.sh`，配置文件添加 hooks 后全程自动。守护进程自带 PID 存活检测，CodeBuddy 意外关闭（Ctrl+C）后 ~10 秒自动退出。
+项目名只是标签（取主工作区根目录名，worktree 回退到主仓库名），不参与做键。
 
-## 原理
+### `/clear` 与最小化
 
-- PyQt5 绘制无边框透明窗口，通过 `SetWindowPos(HWND_TOPMOST)` + 2 秒循环抬升保持置顶
-- QPainter 抗锯齿圆形 + QRadialGradient 三层霓虹发光（内层强光 / 中层光晕 / 外层扩散）
-- 玻璃拟态（Glassmorphism）面板：半透明暗蓝背景 + 多层霓虹边框发光
-- 6 态状态机（idle / thinking / running / waiting / success / failure），QPropertyAnimation 驱动动画
-- **文件系统轮询**：CodeBuddy hook 写 `<项目名>.state` 到 `.traffic-light-states/`，守护进程 300ms 轮询，hook 延迟 ~115ms
-- **项目隔离**：`--project <name>` 绑定到指定项目，不同项目的灯完全解耦
-- **PID 文件锁**：`bind.sh` 启动前自动清理旧实例，避免多守护进程叠加
-- **CodeBuddy 存活检测**：守护进程每 5 秒检查 CodeBuddy PID 是否存活，退出后约 10 秒自动关闭（兜底 Ctrl+C / 终端关闭）
+- `/clear` 时灯**不闪、不重建、不换位**，只是回到空闲：SessionEnd 把状态置 `ended`，新会话立即写 `idle`，旧一轮迟到的 `success` 会被忽略。
+- 终端最小化时灯隐藏，还原时灯显示；灯不抢焦点，也不点亮任务栏图标。
+- 强杀终端（任务管理器结束进程/直接关窗口）后，灯在一个 tick 内自检退出并注销自己的计划任务，不留孤儿灯。
 
 ## Hook 配置
 
-仓库提供 `.codebuddy-hooks.json` 模板文件，安装脚本会自动合并到目标配置（智能追加，不覆盖已有 hooks）。
+仓库提供 `.codebuddy-hooks.json` 模板，安装脚本会自动合并到目标配置（智能追加，不覆盖已有 hooks，重复执行幂等）。
 
 ### 方式 1：一键安装（推荐）
 
@@ -135,92 +127,66 @@ install.bat <项目路径>
 bash install.sh <项目路径>
 ```
 
-安装脚本会自动处理路径替换和去重，不需要手动编辑 JSON。
+安装脚本会自动替换路径、清理旧格式资产，不需要手动编辑 JSON。
 
 ### 方式 2：手动配置
 
-将模板复制到对应位置：
+把模板复制到对应位置，然后将 `TRAFFIC_LIGHT_DIR` 替换为 SignalLight 解压目录：
 
 ```bash
 # 全局（所有项目）：~/.codebuddy/settings.json
 # 项目级：<项目根>/.codebuddy/settings.local.json
-
 cp traffic-light/.codebuddy-hooks.json ~/.codebuddy/settings.json
-# 然后编辑 settings.json，将 TRAFFIC_LIGHT_DIR 替换为实际路径
-# 将 <YOUR_PROJECT> 替换为项目名（全局安装不需要，自动检测）
 ```
 
-> **全局 vs 项目级**：全局安装的 hooks 会与项目级 `settings.local.json` **合并执行**（非覆盖）。如有重复 hook，安装脚本自动跳过，不会产生双重执行。
+> 全局安装的 hooks 会与项目级 `settings.local.json` **合并执行**（非覆盖）。安装脚本按完整命令去重，不会产生双重执行。
 
-配置完成后，六种状态自动与 CodeBuddy 事件联动：
+六种状态与 CodeBuddy 事件联动：
 
 | Hook 事件 | 灯状态 | 动画 | 说明 |
 |-----------|--------|------|------|
-| SessionStart | idle | 三灯暗色呼吸 → 启动守护进程 | agent 就绪 |
+| SessionStart | idle | 三灯暗色呼吸 | 解析归窗、拉起该窗的灯 |
 | UserPromptSubmit | thinking | 红黄绿霓虹跑马灯 | 模型思考中 |
-| PostToolUse | running | 黄灯呼吸 | 工具执行中 |
+| PostToolUse | running | 黄灯呼吸 | 工具执行中，失败亮红灯 |
 | Notification | waiting | 红黄交替警灯（仅权限请求） | 等待用户确认 |
-| Stop | success | 绿灯脉冲（8s 后回 idle） | 本轮完成 |
-| SessionEnd | end | 清除状态 + 杀死守护进程 | 会话结束 |
-
-> **注意**：Notification hook 通过 `"matcher": "permission_prompt"` 过滤，只对权限请求写 `waiting`。60 秒无输入提醒不会触发状态变化。PostToolUse 自动检测失败（`success: false` / `exitCode != 0`），工具失败时亮红灯。
+| Stop | success | 绿灯脉冲 | 本轮完成 |
+| SessionEnd | ended | 按 idle 渲染 | 不删文件、不杀灯 |
 
 **聚合优先级：** waiting > failure > thinking > running > success > idle
 
-**TTL 机制：** thinking 600s / running 90s / waiting 600s / success 8s / failure 30s，超时自动回 idle。thinking 延长到 600s 以支持 reasoning 模型长思考。
+**TTL 机制：** thinking 600s / running 90s / waiting 600s / success 8s / failure 30s，超时自动回 idle。
 
-### 单实例锁
+## 原理
 
-同一项目只允许一个守护进程，通过 `bind.sh` 启动时自动清理旧实例（PID 文件 + PowerShell fallback）。进程退出时 PID 文件被清理。
+- PyQt5 绘制无边框透明窗口，`SetWindowPos(HWND_TOPMOST)` + 循环抬升保持置顶，`WS_EX_NOACTIVATE` 不抢焦点
+- QPainter 抗锯齿圆形 + QRadialGradient 三层霓虹发光，玻璃拟态面板
+- PowerShell 解析器（`resolve.ps1`）是 hwnd 的唯一来源：短命进程内 `FreeConsole → AttachConsole` 取窗口，失败则写 `degraded=1` 进降级灯
+- 所有文件写入都是"同目录临时文件 + 重命名"原子替换，不需要文件锁
+- drawer 每 tick 刷新锚文件心跳，按 nonce 识别"被判死的旧 drawer 醒来"，避免双灯
+- 窗口尺寸/位置取 `GetWindowPlacement` 的还原矩形（最小化窗口的 `GetWindowRect` 只有 159×27 桩尺寸，会误判）
+- 所有 ps1 调用统一 `-NoProfile -ExecutionPolicy Bypass`，避免 Restricted 执行策略下静默失效
 
-```bash
-$ bash bind.sh --project mine
-[SignalLight] daemon started --project mine (PID=12345)
+## 调试
+
+探针（不写状态、不拉灯）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File probe.ps1
 ```
 
-### CodeBuddy 退出检测
+在两个终端各跑一次，`VERDICT` 里的 hwnd 应不同；相同则说明命中了同窗聚合（同一窗口的多个标签页）。
 
-守护进程自带 CodeBuddy 存活检测：`bind.sh` 启动时记录 CodeBuddy 进程 PID 到 `.cbpid` 文件，守护进程每 5 秒检查该 PID 是否存活。CodeBuddy 退出（包括 Ctrl+C、关闭终端）后约 10 秒自动关闭。正常退出通过 SessionEnd hook 调用 `auto-stop.sh` 即时清理。
-
-| 退出方式 | 清理路径 | 延迟 |
-|----------|----------|------|
-| `/exit` 正常退出 | SessionEnd → auto-stop.sh | 即时 |
-| Ctrl+C / 关闭终端 | PID 存活检测 | ~10s |
-| 进程强杀 | PID 存活检测 | ~10s |
-
-**多窗口行为：** 同一项目的多个 CodeBuddy 窗口共用一个守护进程（一盏灯），状态文件以 last-write-wins 聚合；不同项目的守护进程完全独立，互不干扰。关闭某个窗口不会影响其他窗口的灯（只要有任意 CodeBuddy 实例存活）。
-
-> **已知限制：** CodeBuddy hook 环境不传递 `CODEBUDDY_SESSION_ID`（`$$` 每次不同、`$PPID=1`），同一项目的多个终端窗口共用同一个 `<项目名>.state` 文件，以 **last-write-wins** 聚合——灯反映最近触发 hook 的窗口状态。不同项目完全独立，互不影响。
-
-## 手动运行 / 调试
-
-如果不用 hook 自动启动，也可以手动控制：
+手动查看状态（只读）：
 
 ```bash
-cd traffic-light
-
-# 启动守护进程（自动管理生命周期、PID 锁、cbpid 检测）
-bash bind.sh --project mine
-
-# 停止守护进程
-bash bind.sh stop --project mine
-
-# 直接启动 Python（无 cbpid 检测，CodeBuddy 退出后需手动关闭）
-python traffic_light.py --project mine
+ls .traffic-light-states/           # <pid>.state / <session_id>.bind / w<hwnd>.win
+cat .traffic-light-states/12345.state   # 三行：state / cwd / creation_ft
 ```
 
-不指定 `--project` 时聚合所有项目状态（向后兼容）。
+只跑一次 GC（幂等，不解析、不拉灯）：
 
-手动更新状态（调试用途）：
-
-```bash
-# 写状态文件（第一行状态，第二行项目路径）
-printf "thinking\n/d/DevelopTools/mine\n" > .traffic-light-states/mine.state
-printf "running\n/d/DevelopTools/mine\n" > .traffic-light-states/mine.state
-printf "success\n/d/DevelopTools/mine\n" > .traffic-light-states/mine.state
-
-# 清除（回 idle）
-rm .traffic-light-states/mine.state
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File resolve.ps1 -GcOnly
 ```
 
 ## 依赖
@@ -234,11 +200,7 @@ pip install -r requirements.txt
 
 ## 配置
 
-通过命令行参数控制：
-
-| 配置项 | 说明 |
-|--------|------|
-| `--project` | 绑定到指定项目名（对应 `<project>.state` 文件），不指定则聚合所有项目 |
+灯由 hooks 自动管理，没有需要手工指定的项目参数。窗口键来自解析器，状态目录默认是 `<SignalLight 目录>/.traffic-light-states`。
 
 ## 参考项目
 
@@ -256,7 +218,7 @@ pip install -r requirements.txt
 
 ## 平台
 
-仅限 Windows（依赖 `SetWindowPos`、`ctypes.windll` 等 Windows 专属 API）。
+仅限 Windows（依赖 `SetWindowPos`、`ctypes.windll` 等 Windows 专属 API）。支持矩阵见上。
 
 ## 许可证
 

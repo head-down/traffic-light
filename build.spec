@@ -4,7 +4,17 @@ a = Analysis(
     ['traffic_light.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    # EXE 解压即用：解析器、探针、hook 入口、安装入口都必须随包发布。
+    # 目标路径与源码树一致，hooks/traffic-light.sh 靠 ../resolve.ps1 定位解析器。
+    datas=[
+        ('resolve.ps1', '.'),
+        ('probe.ps1', '.'),
+        ('hooks', 'hooks'),
+        ('.codebuddy-hooks.json', '.'),
+        ('install.bat', '.'),
+        ('install.sh', '.'),
+        ('merge-hooks.ps1', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
