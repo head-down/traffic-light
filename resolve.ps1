@@ -2,17 +2,17 @@
 Traffic Light - session/window resolver (single source of truth for hwnd)
 
 Called by bind.sh at SessionStart and when a session's bind is missing or stale.
-T02 scope, in order:
+In order:
   1. identify this session's CodeBuddy process - service proxy port first, parent
      chain only as a fallback (pid + creation time, never guessed)
   2. derive the project label (main repo name; worktrees fall back to it)
   3. resolve that process's terminal window (attach-console -> GW_OWNER)
   4. write <session_id>.bind atomically (identity immutable, hwnd refreshable)
-  5. degraded fallback: hwnd=0 + degraded=1 is still a valid bind
+  5. claim w<hwnd>.win (hwnd=0 claims the machine-wide degraded lamp w0.win) and
+     launch one drawer through a traffic-light-w<hwnd> scheduled task
+  6. collect legacy tasks/files (GC), idempotent
 
-Not in this ticket (T04): claiming <hwnd>.win, spawning a drawer, scheduled task
-lifecycle. The claim block below is the draft's, guarded so it only runs once
-Start-Drawer exists.
+-degraded is only a fallback: hwnd=0 + degraded=1 is still a valid bind.
 
 Design rules (do not simplify away):
   - the proxy port owner is authoritative: the port is bound by this session's
@@ -29,6 +29,9 @@ Design rules (do not simplify away):
   - every ps1 invocation from hooks must use -NoProfile -ExecutionPolicy Bypass.
   - -Snapshot drives the whole decision from a JSON file (tests, dry runs):
     no real process, window, scheduled task or port is touched.
+  - -NoSpawn and -TasksFile are the other two test seams: claim and GC keep
+    their real decisions, but no task is registered, no process starts and the
+    task list comes from a file.
 #>
 param(
     [string]$SessionId = "",
@@ -36,8 +39,10 @@ param(
     [string]$Project = "",
     [string]$StateDir = "",
     [string]$Snapshot = "",
+    [string]$TasksFile = "",
     [switch]$GcOnly,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$NoSpawn
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -274,6 +279,58 @@ function Write-Atomic {
     }
 }
 
+# ---- drawer launch ---------------------------------------------------------
+
+function Find-Pythonw {
+    $c = Get-Command pythonw.exe -ErrorAction SilentlyContinue
+    if ($c) { return [string]$c.Source }
+    return ''
+}
+
+function Start-Drawer {
+    <#
+      Register + run the scheduled task that hosts this anchor's drawer.
+      Only hwnd and nonce travel on the command line (schtasks /TR caps at 261
+      characters): the drawer derives its state dir from its own location.
+      Returns $true only when the task was created and started; a false return
+      means "do not write a fake success".
+    #>
+    param([int64]$Hwnd, [string]$Nonce, [switch]$Degraded)
+
+    $exe = Join-Path $PSScriptRoot 'traffic_light.exe'
+    if (Test-Path -LiteralPath $exe) {
+        $cmd = '"' + $exe + '" --hwnd ' + $Hwnd + ' --nonce ' + $Nonce
+    } else {
+        $script = Join-Path $PSScriptRoot 'traffic_light.py'
+        if (-not (Test-Path -LiteralPath $script)) { return $false }
+        $pythonw = Find-Pythonw
+        if (-not $pythonw) { return $false }
+        $cmd = '"' + $pythonw + '" "' + $script + '" --hwnd ' + $Hwnd + ' --nonce ' + $Nonce
+    }
+    if ($Degraded) { $cmd += ' --degraded' }
+    if ($cmd.Length -ge 261) { return $false }
+
+    # test seam: decide success from the command alone, register nothing
+    if ($NoSpawn) { return $true }
+
+    $task = 'traffic-light-w' + $Hwnd
+    & schtasks.exe /Create /TN $task /TR $cmd /SC ONCE /ST 23:59 /F 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { return $false }
+
+    # a task created by schtasks inherits "only run on AC power", which silently
+    # skips the drawer on battery; clear both flags (best effort, /Create is done)
+    try {
+        $t = Get-ScheduledTask -TaskName $task -ErrorAction Stop
+        $t.Settings.DisallowStartIfOnBatteries = $false
+        $t.Settings.StopIfGoingOnBatteries = $false
+        Set-ScheduledTask -TaskName $task -Settings $t.Settings -ErrorAction Stop | Out-Null
+    } catch {}
+
+    & schtasks.exe /Run /TN $task 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    return $true
+}
+
 # ---- facts -----------------------------------------------------------------
 
 $snap = Get-Procs
@@ -386,15 +443,49 @@ function Test-BindAlive {
     return $true
 }
 
+function Read-TaskList {
+    # -TasksFile lets tests drive the task rules without touching the real
+    # scheduler. Accepts a bare array or { tasks: [...] }; entries may be names
+    # or { taskName: ... } objects.
+    param([string]$Path)
+    $names = @()
+    if (-not (Test-Path -LiteralPath $Path)) { return $names }
+    try { $j = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { return $names }
+    $items = $j
+    if ($null -ne $j -and -not ($j -is [System.Array]) -and
+        ($j.PSObject.Properties.Name -contains 'tasks')) { $items = $j.tasks }
+    foreach ($it in @($items)) {
+        if ($null -eq $it) { continue }
+        if ($it -is [string]) { $names += [string]$it; continue }
+        foreach ($k in @('taskName', 'TaskName', 'name')) {
+            if ($it.PSObject.Properties.Name -contains $k) { $names += [string]$it.$k; break }
+        }
+    }
+    return $names
+}
+
 function Invoke-Gc {
     param([bool]$Apply, $Snap, $ByPid, [string]$Dir)
     $actions = @()
 
-    if (-not $Snap.Injected) {
-        $tasks = @()
-        try { $tasks = @(Get-ScheduledTask -TaskName 'traffic-light-*' -ErrorAction SilentlyContinue) } catch { $tasks = @() }
-        foreach ($t in $tasks) {
-            $name = $t.TaskName
+    # --- scheduled tasks
+    # traffic-light-w<digits> survives only while its anchor exists and is
+    # fresh (<10s); every other traffic-light-* name is a legacy task.
+    $taskNames = $null
+    $canUnregister = $false
+    if ($TasksFile) {
+        $taskNames = @(Read-TaskList $TasksFile)
+    } elseif (-not $Snap.Injected) {
+        $taskNames = @()
+        try {
+            $taskNames = @(Get-ScheduledTask -TaskName 'traffic-light-*' -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.TaskName })
+        } catch { $taskNames = @() }
+        $canUnregister = -not $NoSpawn
+    }
+    if ($null -ne $taskNames) {
+        foreach ($name in @($taskNames)) {
+            if (-not $name) { continue }
             $keep = $false
             if ($name -match '^traffic-light-w(\d+)$') {
                 $anchor = Join-Path $Dir ('w' + $Matches[1] + '.win')
@@ -403,17 +494,19 @@ function Invoke-Gc {
                     if ($age -lt $ANCHOR_STALE_MS) { $keep = $true }
                 }
             }
-            if (-not $keep) {
-                $actions += ('task:' + $name)
-                if ($Apply) { try { Unregister-ScheduledTask -TaskName $name -Confirm:$false } catch {} }
+            if ($keep) { continue }
+            $actions += ('task:' + $name)
+            if ($Apply -and $canUnregister) {
+                try { Unregister-ScheduledTask -TaskName $name -Confirm:$false } catch {}
             }
         }
     }
 
+    # --- files
     if (Test-Path -LiteralPath $Dir) {
         foreach ($f in @(Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue)) {
             $n = $f.Name
-            if ($n -match '\.(pid|cbpid)$') {
+            if ($n -match '\.(pid|cbpid|hwnd)$') {
                 $actions += ('file:' + $n)
                 if ($Apply) { Remove-Item -LiteralPath $f.FullName -Force }
                 continue
@@ -500,62 +593,128 @@ if ($effPid -ne 0) {
     }
 }
 
-$lines = @(
-    'session_id=' + $SessionId
-    'pid=' + $effPid
-    'creation_ft=' + $effFt
-    'hwnd=' + $hwndDec
-    'hwnd_owner_pid=' + $ownerPid
-    'hwnd_owner_ft=' + $ownerFt
-    'project=' + $Project
-    'cwd=' + $cwdNorm
-    'updated=' + $now
-    'degraded=' + $degraded
-)
-Write-Atomic -Path $bindPath -Lines $lines
+function Get-BindLines {
+    # $ProcId, not $Pid: $PID is a read-only automatic variable and parameter
+    # binding to that name throws.
+    param($Sid, $ProcId, $Ft, $Hwnd, $OPid, $OFt, $Proj, $Cwd, $Upd, $Deg)
+    return @(
+        'session_id=' + $Sid
+        'pid=' + $ProcId
+        'creation_ft=' + $Ft
+        'hwnd=' + $Hwnd
+        'hwnd_owner_pid=' + $OPid
+        'hwnd_owner_ft=' + $OFt
+        'project=' + $Proj
+        'cwd=' + $Cwd
+        'updated=' + $Upd
+        'degraded=' + $Deg
+    )
+}
 
-# ---- claim (T04) -----------------------------------------------------------
+Write-Atomic -Path $bindPath -Lines (Get-BindLines $SessionId $effPid $effFt $hwndDec $ownerPid $ownerFt $Project $cwdNorm $now $degraded)
+
+# ---- claim -----------------------------------------------------------------
+#
+# One hwnd == one lamp. The anchor is the mutex: CreateNew is atomic, so exactly
+# one resolver wins. The loser rechecks that the anchor is still being
+# heartbeated (<3s) - if so the session is already shown on that lamp and this
+# run simply rides along; if not, the anchor is dead and gets re-taken once.
+# hwnd=0 claims the machine-wide degraded lamp keyed w0 (same task naming, so
+# GC recognises it).
+#
+# snapshots never touch real tasks or processes; -NoSpawn is the test seam that
+# walks the whole path (Start-Drawer still picks and measures the command) but
+# registers and launches nothing.
 
 $claim = 'none'
 $nonce = ''
 $spawned = $false
-if (-not $snap.Injected -and $hwndDec -ne 0 -and (Get-Command Start-Drawer -ErrorAction SilentlyContinue)) {
-    $anchor = Join-Path $StateDir ('w' + $hwndDec + '.win')
+$anchorPath = ''
+$taskName = ''
+$claimHwnd = [int64]$hwndDec
+$canClaim = (-not $snap.Injected) -or $NoSpawn
+
+if ($canClaim -and ($hwndDec -ne 0 -or $degraded -eq 1)) {
+    $anchorPath = Join-Path $StateDir ('w' + $claimHwnd + '.win')
+    $taskName = 'traffic-light-w' + $claimHwnd
     $isOwner = $false
     for ($try = 0; $try -lt 2 -and -not $isOwner; $try++) {
         try {
-            $fs = [System.IO.File]::Open($anchor, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            $fs = [System.IO.File]::Open($anchorPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
             $nonce = [guid]::NewGuid().ToString('N')
             $sw = New-Object System.IO.StreamWriter($fs)
             $sw.WriteLine('nonce=' + $nonce)
             $sw.WriteLine('drawer_pid=0')
-            $sw.WriteLine('hwnd=' + $hwndDec)
+            $sw.WriteLine('hwnd=' + $claimHwnd)
             $sw.WriteLine('owner_pid=' + $ownerPid)
             $sw.WriteLine('owner_ft=' + $ownerFt)
             $sw.WriteLine('started=' + $now)
             $sw.Flush(); $sw.Close(); $fs.Close()
             $isOwner = $true
         } catch {
-            $age = 99999
-            if (Test-Path -LiteralPath $anchor) { $age = ((Get-Date) - (Get-Item -LiteralPath $anchor).LastWriteTime).TotalMilliseconds }
+            $age = 999999
+            if (Test-Path -LiteralPath $anchorPath) { $age = ((Get-Date) - (Get-Item -LiteralPath $anchorPath).LastWriteTime).TotalMilliseconds }
             if ($age -lt $TICK_GRACE_MS) {
+                # held by a live drawer: prove it survives one beat, then ride it
                 Start-Sleep -Milliseconds 500
-                $age2 = 99999
-                if (Test-Path -LiteralPath $anchor) { $age2 = ((Get-Date) - (Get-Item -LiteralPath $anchor).LastWriteTime).TotalMilliseconds }
+                $age2 = 999999
+                if (Test-Path -LiteralPath $anchorPath) { $age2 = ((Get-Date) - (Get-Item -LiteralPath $anchorPath).LastWriteTime).TotalMilliseconds }
                 if ($age2 -lt $TICK_GRACE_MS) { break }
             }
-            if (Test-Path -LiteralPath $anchor) { Remove-Item -LiteralPath $anchor -Force }
+            # one re-take of a dead (or vanished) anchor, then give up
+            if ($try -ge 1) { break }
+            if (Test-Path -LiteralPath $anchorPath) { Remove-Item -LiteralPath $anchorPath -Force -ErrorAction SilentlyContinue }
+            $nonce = ''
         }
     }
+
     if ($isOwner) {
         $claim = 'owner'
-        $spawned = Start-Drawer $hwndDec $anchor $nonce
+        $spawned = Start-Drawer -Hwnd $claimHwnd -Nonce $nonce -Degraded:($claimHwnd -eq 0)
+        if (-not $spawned) {
+            # never write a fake success: drop our anchor (only if it is still
+            # ours) and rewrite the bind as degraded so the next prompt retries.
+            # No recursive w0 claim from here - that is the degraded lamp's own
+            # claim path, not a fallback for a failed window lamp.
+            $cur = Read-BindFile $anchorPath
+            if (-not $cur.ContainsKey('nonce') -or [string]$cur['nonce'] -eq $nonce) {
+                Remove-Item -LiteralPath $anchorPath -Force -ErrorAction SilentlyContinue
+            }
+            $claim = 'failed'
+            $hwndDec = 0
+            $degraded = 1
+            $ownerPid = 0
+            $ownerFt = ''
+            Write-Atomic -Path $bindPath -Lines (Get-BindLines $SessionId $effPid $effFt 0 0 '' $Project $cwdNorm $now 1)
+        }
     } else {
         $claim = 'busy'
+        $nonce = ''
     }
 }
 
 Invoke-Gc -Apply $true -Snap $snap -ByPid $byPid -Dir $StateDir | Out-Null
+
+if ($NoSpawn) {
+    [pscustomobject]@{
+        session_id  = $SessionId
+        pid         = $effPid
+        creation_ft = $effFt
+        hwnd        = $hwndDec
+        owner_pid   = $ownerPid
+        owner_ft    = $ownerFt
+        project     = $Project
+        cwd         = $cwdNorm
+        degraded    = $degraded
+        bind_path   = $bindPath
+        claim       = $claim
+        nonce       = $nonce
+        anchor      = $anchorPath
+        task        = $taskName
+        spawned     = $spawned
+    } | ConvertTo-Json -Compress -Depth 4
+    exit 0
+}
 
 Write-Output ('[SignalLight] bind sid=' + $SessionId + ' pid=' + $effPid + ' hwnd=' + $hwndDec + ' degraded=' + $degraded + ' project=' + $Project + ' claim=' + $claim + ' drawer=' + $spawned)
 exit 0
