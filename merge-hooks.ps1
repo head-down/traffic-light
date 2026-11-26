@@ -101,7 +101,13 @@ function Test-CommandExists {
     return $false
 }
 
-# 旧版本的 hook 入口已随本次升级删除，留着只会在每次事件报错
+# 旧版本的 hook 入口已随本次升级删除，留着只会在每次事件报错。
+# v1.0.0 及更早的入口有三种形态：
+#   auto-bind / auto-stop / bind.sh --project
+#   hooks/traffic-light.sh <旧状态名>（idle|thinking|running|waiting|success）
+# 新入口是 hooks/traffic-light.sh <事件名>，event `end` 属于新契约，不能误删。
+$LEGACY_HOOK_PATTERN = 'auto-(bind|stop)\.sh|\bbind\.sh\b|traffic-light\.sh[\s"'']+(idle|thinking|running|waiting|success)([\s"'';]|$)'
+
 function Remove-LegacyHooks {
     param($ExistingHookGroups)
     $kept = @()
@@ -109,7 +115,7 @@ function Remove-LegacyHooks {
         $legacy = $false
         if ($group.hooks) {
             foreach ($h in $group.hooks) {
-                if ($h.command -and $h.command -match 'auto-(bind|stop)\.sh') {
+                if ($h.command -and $h.command -match $LEGACY_HOOK_PATTERN) {
                     $legacy = $true
                     break
                 }
