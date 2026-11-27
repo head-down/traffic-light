@@ -257,12 +257,18 @@ function Invoke-Tests {
         Assert-Eq 'nothing was spawned' $j.spawned $false
         Assert-Eq 'hwnd falls back to 0' $j.hwnd 0
         Assert-Eq 'degraded is flagged' $j.degraded 1
+        # the lamp did not come up: output must not claim the window's owner
+        Assert-Eq 'owner_pid is cleared' $j.owner_pid 0
+        Assert-Eq 'owner_ft is cleared' $j.owner_ft ''
+        Assert-Eq 'hwnd_source says none' $j.hwnd_source 'none'
         Assert-True 'the claimed anchor was dropped' (-not (Test-Path -LiteralPath (Join-Path $state 'w987654321.win')))
         Assert-True 'no recursive w0 claim' (-not (Test-Path -LiteralPath (Join-Path $state 'w0.win')))
         $b = Read-Ini (Join-Path $state 's8.bind')
         Assert-Eq 'bind hwnd is 0' $b['hwnd'] '0'
         Assert-Eq 'bind is degraded' $b['degraded'] '1'
         Assert-Eq 'identity survives the failure' $b['pid'] '2000'
+        Assert-Eq 'bind owner is cleared' $b['hwnd_owner_pid'] '0'
+        Assert-Eq 'bind hwnd_source is none' $b['hwnd_source'] 'none'
     }
 
     # ---------------------------------------------------------------- E1 ----

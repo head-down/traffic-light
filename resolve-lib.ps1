@@ -557,8 +557,7 @@ function Get-ResolutionDecision {
         [string]$StateDir = '',
         [string]$SessionId = '',
         [string]$Cwd = '',
-        [switch]$Claim,
-        [int64]$Now = 0
+        [switch]$Claim
     )
 
     $ctx = New-ResolverContext $Snap
@@ -657,7 +656,7 @@ function Get-ResolutionDecision {
 
     # Get-Date -UFormat %s formats local time as if it were UTC (8h ahead here),
     # which would freeze the 60s bind TTL. Use the real epoch instead.
-    if (-not $Now) { $Now = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+    $now = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
     $cwdNorm = $Cwd
     if (-not $cwdNorm) { $cwdNorm = (Get-Location).Path }
@@ -720,7 +719,7 @@ function Get-ResolutionDecision {
                 $sw.WriteLine('hwnd=' + $claimHwnd)
                 $sw.WriteLine('owner_pid=' + $ownerPid)
                 $sw.WriteLine('owner_ft=' + $ownerFt)
-                $sw.WriteLine('started=' + $Now)
+                $sw.WriteLine('started=' + $now)
                 $sw.Flush(); $sw.Close(); $fs.Close()
                 $isOwner = $true
             } catch {
@@ -744,7 +743,7 @@ function Get-ResolutionDecision {
         else { $claimState = 'busy'; $nonce = '' }
     }
 
-    $bindLines = Get-BindLines $SessionId $effPid $effFt $hwndDec $ownerPid $ownerFt $project $cwdNorm $Now $degraded $hwndSource
+    $bindLines = Get-BindLines $SessionId $effPid $effFt $hwndDec $ownerPid $ownerFt $project $cwdNorm $now $degraded $hwndSource
 
     return [pscustomobject]@{
         session_id    = $SessionId
@@ -766,6 +765,6 @@ function Get-ResolutionDecision {
         task        = $taskName
         pid_source  = $pidSource
         hwnd_source = $hwndSource
-        now         = $Now
+        now         = $now
     }
 }

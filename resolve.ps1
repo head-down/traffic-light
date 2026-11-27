@@ -155,8 +155,9 @@ function Invoke-GcPlan {
     }
 }
 
-function Get-GcResult {
-    # 读任务表、算计划、按需执行；-GcOnly 与 SessionStart 共用。
+function Invoke-Gc {
+    # 读任务表、算计划、按需执行（名字里没有 Get：Apply 是会写盘的）。
+    # -GcOnly 与 SessionStart 共用。
     param($Snap, $ByPid, [string]$Dir, [string]$TasksFile, [switch]$Apply, [switch]$NoSpawn)
     $names = Get-TaskNames -Snap $Snap -TasksFile $TasksFile
     $canUnregister = ($null -ne $names) -and (-not $TasksFile) -and (-not $NoSpawn)
@@ -175,7 +176,7 @@ if (-not $StateDir) { $StateDir = Join-Path $PSScriptRoot '.traffic-light-states
 if (-not $SessionId) { $SessionId = "manual-$PID" }
 
 if ($GcOnly) {
-    $plan = @(Get-GcResult -Snap $snap -ByPid $byPid -Dir $StateDir -TasksFile $TasksFile -Apply:(-not $DryRun) -NoSpawn:$NoSpawn)
+    $plan = @(Invoke-Gc -Snap $snap -ByPid $byPid -Dir $StateDir -TasksFile $TasksFile -Apply:(-not $DryRun) -NoSpawn:$NoSpawn)
     if ($DryRun) {
         [pscustomobject]@{ gc = @($plan) } | ConvertTo-Json -Compress -Depth 4
     } else {
@@ -215,6 +216,9 @@ $claim = $d.claim
 $spawned = $false
 $hwndOut = $d.hwnd
 $degradedOut = $d.degraded
+$ownerOut = $d.owner_pid
+$ownerFtOut = $d.owner_ft
+$hwndSrcOut = $d.hwnd_source
 
 New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
 
@@ -243,6 +247,10 @@ if ($claim -eq 'owner') {
         $claim = 'failed'
         $hwndOut = 0
         $degradedOut = 1
+        # 输出必须和下面重写的 bind 一致：灯没起来，就不能再声称窗口的 owner
+        $ownerOut = 0
+        $ownerFtOut = ''
+        $hwndSrcOut = 'none'
         Write-Atomic -Path $d.bind_path -Lines (Get-BindLines $d.session_id $d.pid $d.creation_ft 0 0 '' $d.project $d.cwd $d.now 1 'none')
     }
 }
@@ -250,7 +258,7 @@ if ($claim -eq 'owner') {
 # GC belongs to install and SessionStart only; prompt-triggered re-resolves
 # pass -NoGc so they never sweep another session's state directory.
 if (-not $NoGc) {
-    Get-GcResult -Snap $snap -ByPid $byPid -Dir $StateDir -TasksFile $TasksFile -Apply -NoSpawn:$NoSpawn | Out-Null
+    Invoke-Gc -Snap $snap -ByPid $byPid -Dir $StateDir -TasksFile $TasksFile -Apply -NoSpawn:$NoSpawn | Out-Null
 }
 
 if ($NoSpawn) {
@@ -259,8 +267,8 @@ if ($NoSpawn) {
         pid         = $d.pid
         creation_ft = $d.creation_ft
         hwnd        = $hwndOut
-        owner_pid   = $d.owner_pid
-        owner_ft    = $d.owner_ft
+        owner_pid   = $ownerOut
+        owner_ft    = $ownerFtOut
         project     = $d.project
         cwd         = $d.cwd
         degraded    = $degradedOut
@@ -270,7 +278,7 @@ if ($NoSpawn) {
         anchor      = $d.anchor
         task        = $d.task
         spawned     = $spawned
-        hwnd_source = $d.hwnd_source
+        hwnd_source = $hwndSrcOut
     } | ConvertTo-Json -Compress -Depth 4
     exit 0
 }
