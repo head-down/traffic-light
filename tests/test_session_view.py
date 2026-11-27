@@ -7,12 +7,11 @@ import os
 import pytest
 
 from core.session_view import (
-    Bind,
     FileSystemSources,
     InMemorySources,
     SessionView,
-    StateEntry,
 )
+from core.wire import Bind, StateEntry
 
 
 NOW = 1000.0

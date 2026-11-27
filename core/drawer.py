@@ -1,17 +1,12 @@
-"""一窗一灯的 drawer 纯逻辑：锚文件读写、nonce 校验、自灭判定。
+"""一窗一灯的 drawer 纯逻辑：nonce 校验、自灭判定、降级灯标签。
 
-这里不做任何 Qt / 窗口操作，便于用纯逻辑测试覆盖判定；运行期胶水在
-traffic_light.py。锚文件（.traffic-light-states/w<hwnd>.win）由解析器原子
-创建，drawer 只负责刷新 mtime、回填 drawer_pid，以及判定自己该死。
+这里不做任何 Qt / 窗口操作，也不碰文件，便于用纯逻辑测试覆盖判定；运行期
+胶水在 traffic_light.py，锚的格式与读写（.traffic-light-states/w<hwnd>.win）
+在 core/wire.py。drawer 只判定自己该死。
 """
-import os
-import sys
-import tempfile
 from dataclasses import dataclass
 
 from core.process_identity import creation_ft_matches
-
-STATE_DIR_NAME = ".traffic-light-states"
 
 # 渲染 tick 与心跳 tick：锚 mtime 每 1000ms 显式刷新一次
 TICK_MS = 300
@@ -28,101 +23,10 @@ EXIT_IDLE = "no_live_sessions"
 
 
 @dataclass(frozen=True)
-class Anchor:
-    """w<hwnd>.win 的内容"""
-    nonce: str = ""
-    drawer_pid: int = 0
-    hwnd: int = 0
-    owner_pid: int = 0
-    owner_ft: str = ""
-    started: str = ""
-
-
-@dataclass(frozen=True)
 class ExitDecision:
     """自灭判定结果；remove_anchor=False 时只退出、不碰锚（被取代）"""
     reason: str
     remove_anchor: bool
-
-
-def derive_state_dir():
-    """状态目录由自身位置推导：源码版 = 脚本目录，frozen = EXE 目录。"""
-    if getattr(sys, "frozen", False):
-        base = os.path.dirname(sys.executable)
-    else:
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, STATE_DIR_NAME)
-
-
-def anchor_path(state_dir, hwnd):
-    return os.path.join(state_dir, "w%d.win" % int(hwnd))
-
-
-def _to_int(value, default=0):
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def read_anchor(path):
-    """读锚；文件缺失或不可读时返回 None"""
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        return None
-
-    fields = {}
-    for line in lines:
-        line = line.strip()
-        if not line or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        fields[key.strip()] = value.strip()
-
-    return Anchor(
-        nonce=fields.get("nonce", ""),
-        drawer_pid=_to_int(fields.get("drawer_pid")),
-        hwnd=_to_int(fields.get("hwnd")),
-        owner_pid=_to_int(fields.get("owner_pid")),
-        owner_ft=fields.get("owner_ft", ""),
-        started=fields.get("started", ""),
-    )
-
-
-def write_anchor(path, anchor):
-    """同目录临时文件 + 重命名，原子替换（不加锁）"""
-    directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    lines = [
-        "nonce=" + anchor.nonce,
-        "drawer_pid=%d" % anchor.drawer_pid,
-        "hwnd=%d" % anchor.hwnd,
-        "owner_pid=%d" % anchor.owner_pid,
-        "owner_ft=" + anchor.owner_ft,
-        "started=" + anchor.started,
-    ]
-    fd, tmp = tempfile.mkstemp(prefix=".win-", dir=directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write("\n".join(lines) + "\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def touch_anchor(path):
-    """显式刷新锚 mtime（心跳）；锚已消失时返回 False"""
-    try:
-        os.utime(path, None)
-        return True
-    except OSError:
-        return False
 
 
 def owner_matches(anchor, observed_pid, observed_ft):

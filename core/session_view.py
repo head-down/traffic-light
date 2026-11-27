@@ -13,6 +13,9 @@ import os
 import time
 from dataclasses import dataclass
 
+from core import wire
+from core.wire import VALID_STATES
+
 # 聚合优先级：等待确认 > 失败 > 思考 > 运行 > 成功 > 空闲
 AGGREGATE_PRIORITY = ["waiting", "failure", "thinking", "running", "success", "idle"]
 # 每类状态的 TTL（秒）：超时只在聚合时回落 idle，不淘汰会话本身
@@ -25,40 +28,12 @@ STATE_TTL_SECONDS = {
     "idle": float("inf"),
 }
 
-# 状态集合：原六态 + ended（SessionEnd 只置 ended，不删文件）
-VALID_STATES = set(AGGREGATE_PRIORITY) | {"ended"}
-
 _PRIORITY_INDEX = {name: index for index, name in enumerate(AGGREGATE_PRIORITY)}
 
 
 # ============================================================
 # 数据模型
 # ============================================================
-
-@dataclass(frozen=True)
-class Bind:
-    """一条绑定记录（`<session_id>.bind` 的解析结果）"""
-    session_id: str
-    pid: int
-    creation_ft: str = ""
-    hwnd: int = 0
-    hwnd_owner_pid: int = 0
-    hwnd_owner_ft: str = ""
-    project: str = ""
-    cwd: str = ""
-    updated: float = 0.0
-    degraded: bool = False
-
-
-@dataclass(frozen=True)
-class StateEntry:
-    """一条身份层状态（`<pid>.state` 的解析结果）"""
-    pid: int
-    state: str
-    cwd: str = ""
-    creation_ft: str = ""
-    mtime: float = 0.0
-
 
 @dataclass(frozen=True)
 class SessionInfo:
@@ -93,53 +68,6 @@ class Sources:
         raise NotImplementedError
 
 
-def _to_int(value, default=None):
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_bool(value):
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
-
-
-def _parse_bind(path):
-    """解析单个 .bind 文件；缺 pid 或 pid 非数字视为损坏。
-
-    pid=0 是合法状态：解析器认出了窗口却没认定进程（身份未知）。这条
-    绑定仍属于那个窗口，只是渲染成 idle、跳过进程校验。
-    """
-    fields = {}
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            fields[key.strip()] = value.strip()
-
-    pid = _to_int(fields.get("pid"))
-    if pid is None:
-        raise ValueError(f"invalid bind pid: {fields.get('pid')!r}")
-    if pid < 0:
-        pid = 0
-
-    session_id = fields.get("session_id", "")
-    return Bind(
-        session_id=session_id,
-        pid=pid,
-        creation_ft=fields.get("creation_ft", ""),
-        hwnd=_to_int(fields.get("hwnd"), 0),
-        hwnd_owner_pid=_to_int(fields.get("hwnd_owner_pid"), 0),
-        hwnd_owner_ft=fields.get("hwnd_owner_ft", ""),
-        project=fields.get("project", ""),
-        cwd=fields.get("cwd", ""),
-        updated=float(fields.get("updated", 0) or 0),
-        degraded=_to_bool(fields.get("degraded")),
-    )
-
-
 class FileSystemSources(Sources):
     """从 `.traffic-light-states/` 读真实绑定与状态文件"""
 
@@ -156,10 +84,10 @@ class FileSystemSources(Sources):
             return binds
 
         for name in names:
-            if not name.endswith(".bind"):
+            if not wire.is_bind(name):
                 continue
             try:
-                binds.append(_parse_bind(os.path.join(self._state_dir, name)))
+                binds.append(wire.read_bind(os.path.join(self._state_dir, name)))
             except (OSError, ValueError):
                 continue
         return binds
@@ -174,27 +102,18 @@ class FileSystemSources(Sources):
             return states
 
         for name in names:
-            if not name.endswith(".state"):
-                continue
-            pid = _to_int(name[:-len(".state")])
-            if pid is None or pid <= 0:
+            pid = wire.parse_state_name(name)
+            if pid is None:
                 continue
             path = os.path.join(self._state_dir, name)
             try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    lines = f.read().splitlines()
-                state = lines[0].strip() if lines else ""
-                if state not in VALID_STATES:
-                    continue
-                states[pid] = StateEntry(
-                    pid=pid,
-                    state=state,
-                    cwd=lines[1].strip() if len(lines) >= 2 else "",
-                    creation_ft=lines[2].strip() if len(lines) >= 3 else "",
-                    mtime=os.path.getmtime(path),
-                )
+                entry = wire.read_state(path, pid,
+                                        mtime=os.path.getmtime(path))
             except OSError:
                 continue
+            if entry.state not in VALID_STATES:
+                continue
+            states[pid] = entry
         return states
 
 

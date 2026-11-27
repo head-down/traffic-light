@@ -61,12 +61,14 @@ from core.drawer import (
     EXIT_NONCE,
     HEARTBEAT_MS,
     TICK_MS,
-    Anchor,
     DrawerGuard,
-    anchor_path,
     badge_count,
     degraded_beat,
     degraded_label,
+)
+from core.wire import (
+    Anchor,
+    anchor_path,
     derive_state_dir,
     read_anchor,
     touch_anchor,
