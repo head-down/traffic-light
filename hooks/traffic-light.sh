@@ -94,6 +94,8 @@ _classify_tool_failure() {
     body="$(printf '%s' "$raw" | tr -d '\r\n')"
     printf '%s' "$body" | grep -q '[{,][[:space:]]*"success"[[:space:]]*:[[:space:]]*false' && return 0
     printf '%s' "$body" | grep -q '[{,][[:space:]]*"error"[[:space:]]*:' && return 0
+    # CodeBuddy 真实 payload 用 is_error 标记失败，可能不带 error 文本
+    printf '%s' "$body" | grep -q '[{,][[:space:]]*"is_error"[[:space:]]*:[[:space:]]*true' && return 0
     tool="$(_json_str tool_name)"
     if [ "$tool" = "Bash" ] && printf '%s' "$body" | grep -q '[{,][[:space:]]*"exitCode"[[:space:]]*:[[:space:]]*[1-9]'; then
         return 0

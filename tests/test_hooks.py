@@ -187,6 +187,15 @@ def test_tool_detects_error_field(env):
     assert _lines(env.state_path())[0] == "failure"
 
 
+def test_tool_detects_is_error_flag(env):
+    # CodeBuddy 的 PostToolUse 用 is_error 标记失败，可能没有 error 文本
+    env.write_bind()
+    payload = _payload(tool_name="Bash",
+                       tool_response={"is_error": True, "output": "boom"})
+    assert env.run("tool", payload).returncode == 0
+    assert _lines(env.state_path())[0] == "failure"
+
+
 def test_tool_detects_bash_nonzero_exit(env):
     env.write_bind()
     payload = _payload(tool_name="Bash", tool_response={"exitCode": 2})
