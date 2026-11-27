@@ -59,7 +59,7 @@
 系统拆成三层，每层用各自的天然键，任何一层都不借用另一层的键：
 
 - **身份层**：键 = CodeBuddy 进程 PID，值 = `<pid>.state`。必须同时记录并校验进程创建时间（FILETIME），PID 复用视为不同身份。状态聚合优先级（waiting > failure > thinking > running > success > idle）原样保留在这一层。
-- **绑定层**：键 = hook payload 的 `session_id`，值 = `<session_id>.bind`。文件内容：`session_id / pid / creation_ft / hwnd / hwnd_owner_pid / hwnd_owner_ft / project / cwd / updated / degraded`。**身份字段（pid、creation_ft）写入后不可变，只有 hwnd 可刷新。**
+- **绑定层**：键 = hook payload 的 `session_id`，值 = `<session_id>.bind`。文件内容：`session_id / pid / creation_ft / hwnd / hwnd_owner_pid / hwnd_owner_ft / project / cwd / updated / degraded / hwnd_source`（`hwnd_source` 只用于诊断窗口是怎么认出来的，chain / bind / sole / none，回读时忽略）。**身份字段（pid、creation_ft）写入后不可变，只有 hwnd 可刷新。**
 - **project 是标签，不是键**：取主工作区根目录名（git common dir 的父目录），worktree 里回退到主仓库名而不是 worktree 目录名；非 git 目录才用 cwd basename。`cwd` 单独记录会话真实目录，二者不得混用。
 - **显示层**：键 = 终端窗口 hwnd（十进制），值 = `w<hwnd>.win` 锚文件 + `traffic-light-w<hwnd>` 计划任务 + 一个 drawer 进程。一个 hwnd 恒等于一盏灯。
 
@@ -68,8 +68,9 @@
 - 新的 PowerShell 解析器是 hwnd 的唯一来源；Python 侧不再自行发现终端，只看锚/绑定里传入的 hwnd。
 - **认进程优先走服务代理端口**：hook 进程继承 `CODEBUDDY_SERVICE_PROXY_URL`（形如 `http://127.0.0.1:<port>/internal/hooks/...`），该端口由本会话自己的 CodeBuddy 主进程独占监听。取端口 → 反查监听它的进程 → 得 pid + 创建时间。实测本机三个活会话 1:1 对应：54894→17324、59553→7628、54163→32424，与 `bind.sh` 用同一路径写入的 `.cbpid` 完全一致。端口缺失、无监听、查不到 owner 三种情况才退回父链快照；两种情况都拿不到就 fail-closed 写 `degraded=1`，不猜。
 - 父链只用于认"我是哪个 codebuddy 进程"（node.exe 且命令行含 codebuddy，排除 conpty/node-pty 类瞬时进程），必须一次 CIM 全量快照在内存里走完，不做逐层查询。
-- hwnd 必须靠 attach-console 获取：短命解析进程内 `FreeConsole → AttachConsole(目标 pid) → GetConsoleWindow`；若得到 `PseudoConsoleWindow` 或零尺寸，取 `GW_OWNER`；再用 `IsWindow + IsWindowVisible + rect ≥ 50×50` 验收。探针实测该路径在 Windows Terminal（ConPTY）下有效，父链上溯拿不到窗口。
-- attach 只在短命解析进程里发生，drawer 永不 attach（它没有控制台，attach 会挂上一个甚至闪窗）。
+- hwnd 只从本会话自己的进程链上认：沿链由近到远找属于链上进程的控制台窗口（ConPTY 是 `PseudoConsoleWindow`，由窗格里的 shell 独占；经典控制台是 shell 的 conhost 子进程持有的 `ConsoleWindowClass`），前者取 `GW_OWNER` 得终端窗口，再用 `IsWindow + IsWindowVisible + rect ≥ 50×50` 验收。多终端共存时各窗格的控制台窗口互不相同，不会串窗。
+- 禁止 `AttachConsole`：对 ConPTY 控制台 attach 会让 Windows 新建一个终端窗口（用户看到闪一下黑框）。禁止读 `GetForegroundWindow`：多终端下前台是正在打字的那个，其余会话会被绑到别人的灯上——曾导致所有灯聚到一盏、标题只剩角标 `·N`。
+- 链上认不出（被包装器重挂等）时先沿用已有绑定里仍然有效的 hwnd；桌面只有一个终端窗口才兜底用它；否则写 `degraded=1`。
 - 解析失败不静默：写 `degraded=1` 的绑定（pid 仍可用），进入降级灯。
 - **最小化窗口不能用 `GetWindowRect`**：实测最小化的终端只返回 159×27 的桩尺寸，会误判成"无窗口"。尺寸与定位一律取 `GetWindowPlacement` 的还原矩形；`IsIconic` 单独作为可见性信号。
 
