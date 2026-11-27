@@ -88,8 +88,10 @@ _json_object_after() {
 # 必须落在成员位置：工具刚读过一份含 "error": 的文件时，那段文字会以转义
 # 形式出现在字符串里，不能当成失败。
 _classify_tool_failure() {
-    local body tool
-    body="$(_json_object_after tool_response)" || return 1
+    local raw body tool
+    raw="$(_json_object_after tool_response)" || return 1
+    # JSON 允许缩进换行；压成一行，[{,] 才能与成员 key 相邻
+    body="$(printf '%s' "$raw" | tr -d '\r\n')"
     printf '%s' "$body" | grep -q '[{,][[:space:]]*"success"[[:space:]]*:[[:space:]]*false' && return 0
     printf '%s' "$body" | grep -q '[{,][[:space:]]*"error"[[:space:]]*:' && return 0
     tool="$(_json_str tool_name)"

@@ -140,9 +140,15 @@ def test_anchor_field_table_matches_the_powershell_writer():
 
 def test_state_shape_matches_the_bash_writer():
     text = _source("hooks/traffic-light.sh")
-    match = re.search(r'''printf '((?:%s\\n)+)' "\$state"''', text)
-    assert match is not None
-    assert match.group(1).count("%s") == len(wire.STATE_FIELDS)
+    # 三行的顺序就是契约：state / cwd / creation_ft
+    assert ("printf '%s\\n%s\\n%s\\n' "
+            '"$state" "$bind_cwd" "$bind_ft"') in text
+
+
+def test_aggregate_priority_states_are_valid_wire_states():
+    # 渲染优先级与格式允许值是两张表，加状态时不能只改一处
+    from core.session_view import AGGREGATE_PRIORITY
+    assert set(AGGREGATE_PRIORITY) <= set(wire.VALID_STATES)
 
 
 def test_bash_bind_reader_only_touches_known_fields():

@@ -162,7 +162,9 @@ class SessionView:
 
         entries = []
         for bind in binds:
-            if (bind.hwnd == 0) != self._degraded:
+            # 写出端保证 degraded ⇔ hwnd==0；历史文件里两者可能不一致，
+            # 任一说降级就按降级灯处理，避免旧绑定再没人认领
+            if (bind.degraded or bind.hwnd == 0) != self._degraded:
                 continue
             if not self._degraded and bind.hwnd != self._hwnd:
                 continue

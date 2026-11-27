@@ -167,6 +167,19 @@ def test_tool_detects_failed_tool_response(env):
     assert env.calls() == []
 
 
+@pytest.mark.parametrize("response", [
+    {"success": False},
+    {"error": "boom"},
+    {"exitCode": 2},
+])
+def test_tool_detects_failure_in_pretty_printed_payload(env, response):
+    # 缩进后的 JSON 与紧凑 JSON 必须给出同一结论
+    env.write_bind()
+    payload = _payload(tool_name="Bash", tool_response=response)
+    assert env.run("tool", stdin=json.dumps(payload, indent=2)).returncode == 0
+    assert _lines(env.state_path())[0] == "failure"
+
+
 def test_tool_detects_error_field(env):
     env.write_bind()
     payload = _payload(tool_response={"error": "boom"})

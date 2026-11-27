@@ -227,12 +227,13 @@ def test_degraded_view_contains_only_degraded_binds():
     assert window.label == "win"
 
 
-def test_degraded_view_only_takes_windowless_binds():
-    # 降级灯只认 hwnd==0；字段与 hwnd 不一致时以 hwnd 为准
+def test_degraded_view_takes_a_flagged_bind_with_a_stale_hwnd():
+    # 写出端保证 degraded ⇔ hwnd==0；历史文件可能不一致，字段说了算
     sources = _sources([_bind(1, hwnd=555, degraded=True)],
                        [_state(1, "thinking")])
     snap = _view(sources, hwnd=0).snapshot()
-    assert snap.count == 0
+    assert snap.count == 1
+    assert snap.state == "thinking"
     assert snap.degraded is True
 
 
