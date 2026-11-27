@@ -451,6 +451,26 @@ function Invoke-Tests {
         Assert-Eq 'two terminal windows: degraded' $r2.Json.degraded 1
     }
 
+    # ---------------------------------------------------------------- D4b ---
+    Write-Output 'D4b  a console without an owner degrades instead of borrowing a window'
+    $d = New-Case 'd4b'
+    $snap = Join-Path $d 'snap.json'
+    # IDEA / VSCode 的内嵌终端：ConPTY 窗口在链上，但 GW_OWNER 为空。
+    # 桌面上那个 WT 窗口是别人的灯，不能借。
+    Write-Snapshot -Path $snap -SelfPid 5000 -Windows @(
+        @{ hwnd = 531140; pid = 5000; 'class' = 'PseudoConsoleWindow'; visible = $false; w = 0; h = 0; owner = 0 }
+        @{ hwnd = 7600; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS'; visible = $true; w = 1200; h = 700 }
+    ) -Procs @(
+        @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 0; name = 'explorer.exe'; creationFt = '600'; commandLine = 'explorer.exe'; hwnd = 0 }
+    )
+    $r = Get-DryRun -Snapshot $snap -StateDir (Join-Path $d 'state') -SessionId 'idea'
+    if ($r.Json) {
+        Assert-Eq 'no foreign window is borrowed' $r.Json.hwnd 0
+        Assert-Eq 'the source is none' $r.Json.hwnd_source 'none'
+        Assert-Eq 'the lamp degrades' $r.Json.degraded 1
+    }
+
     # ---------------------------------------------------------------- SM1 ----
     # The shell is the shipped seam the hook calls: one run, full output contract.
     Write-Output 'SM1  the shell keeps the dry-run JSON contract'

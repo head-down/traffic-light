@@ -209,6 +209,37 @@ function Get-ChainTerminalWindow {
     return [IntPtr]::Zero
 }
 
+function Test-ChainHasConsoleWindow {
+    # 本会话链上是否见过自己的控制台窗口（不论 owner 能不能用）。见过就
+    # 说明会话在某个终端宿主里；owner 认不出时该降级，而不是把桌面上唯一
+    # 的终端窗口借过来——IDEA / VSCode 的内嵌终端就是 owner=0 的情形。
+    param($Ctx, [object[]]$Chain, $ByPid)
+    $map = Get-WindowsByPid $Ctx
+    foreach ($p in $Chain) {
+        foreach ($h in @($map[[int]$p.Pid])) {
+            if (-not $h) { continue }
+            $w = Get-Win $Ctx $h
+            if (-not $w) { continue }
+            if ($w.Class -eq 'PseudoConsoleWindow' -or $w.Class -eq 'ConsoleWindowClass') {
+                return $true
+            }
+        }
+    }
+    for ($i = $Chain.Count - 1; $i -ge 0; $i--) {
+        $p = $Chain[$i]
+        foreach ($k in @($map.Keys)) {
+            $kid = $ByPid[$k]
+            if (-not $kid -or $kid.PPid -ne $p.Pid) { continue }
+            if ($kid.Name -notmatch '^(conhost|OpenConsole)\.exe$') { continue }
+            foreach ($h in @($map[$k])) {
+                $w = Get-Win $Ctx $h
+                if ($w -and $w.Class -eq 'ConsoleWindowClass') { return $true }
+            }
+        }
+    }
+    return $false
+}
+
 function Get-SoleTerminalWindow {
     # 最后一档兜底：桌面上只有一个终端窗口时不可能认错
     param($Ctx)
@@ -637,8 +668,11 @@ function Get-ResolutionDecision {
             }
         }
     }
-    # 第三档：全桌面只有一个终端窗口
-    if ($win -eq [IntPtr]::Zero) {
+    # 第三档：全桌面只有一个终端窗口。链上已经见过自己的控制台窗口时不能
+    # 用这一档：那是 IDEA / VSCode 的内嵌终端，借过来会把两个会话挤进别人
+    # 的灯（两个项目的会话合并成一盏 ·2）。
+    if ($win -eq [IntPtr]::Zero -and
+        -not (Test-ChainHasConsoleWindow $ctx $chain $byPid)) {
         $win = Resolve-RealWindow $ctx (Get-SoleTerminalWindow $ctx)
         if ($win -ne [IntPtr]::Zero) { $hwndSource = 'sole' }
     }
