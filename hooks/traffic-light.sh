@@ -53,6 +53,52 @@ _json_str() {
         | sed -E 's/.*:[[:space:]]*"(.*)"$/\1/'
 }
 
+# 从 payload 里截出某个 key 对应的 JSON 对象（含花括号）。高频事件不能起
+# python/jq，所以用一个手写扫描：只认字符串边界与花括号深度。
+_json_object_after() {
+    printf '%s' "$hook_stdin" | awk -v key="\"$1\"" '
+        { text = text $0 "\n" }
+        END {
+            i = index(text, key)
+            if (i == 0) exit 1
+            i += length(key)
+            while (i <= length(text) && substr(text, i, 1) ~ /[[:space:]:]/) i++
+            if (substr(text, i, 1) != "{") exit 1
+            start = i; depth = 0; quoted = 0; escaped = 0
+            for (; i <= length(text); i++) {
+                c = substr(text, i, 1)
+                if (quoted) {
+                    if (escaped) escaped = 0
+                    else if (c == "\\") escaped = 1
+                    else if (c == "\"") quoted = 0
+                    continue
+                }
+                if (c == "\"") { quoted = 1; continue }
+                if (c == "{") depth++
+                else if (c == "}") {
+                    depth--
+                    if (depth == 0) { print substr(text, start, i - start + 1); exit 0 }
+                }
+            }
+            exit 1
+        }'
+}
+
+# 一次工具调用是否失败（0 = 失败）。规则只看 tool_response 对象内部，且 key
+# 必须落在成员位置：工具刚读过一份含 "error": 的文件时，那段文字会以转义
+# 形式出现在字符串里，不能当成失败。
+_classify_tool_failure() {
+    local body tool
+    body="$(_json_object_after tool_response)" || return 1
+    printf '%s' "$body" | grep -q '[{,][[:space:]]*"success"[[:space:]]*:[[:space:]]*false' && return 0
+    printf '%s' "$body" | grep -q '[{,][[:space:]]*"error"[[:space:]]*:' && return 0
+    tool="$(_json_str tool_name)"
+    if [ "$tool" = "Bash" ] && printf '%s' "$body" | grep -q '[{,][[:space:]]*"exitCode"[[:space:]]*:[[:space:]]*[1-9]'; then
+        return 0
+    fi
+    return 1
+}
+
 session_id="$(_json_str session_id)"
 [ -z "$session_id" ] && session_id="${CODEBUDDY_SESSION_ID:-}"
 [ -z "$session_id" ] && exit 0
@@ -189,14 +235,8 @@ case "$event" in
     end)           state="ended" ;;
 esac
 
-# tool 失败判定沿用 stdin grep（success:false / error / Bash exitCode≠0）
 if [ "$event" = "tool" ] && [ -n "$hook_stdin" ]; then
-    if printf '%s' "$hook_stdin" | grep -q '"success"[[:space:]]*:[[:space:]]*false'; then
-        state="failure"
-    elif printf '%s' "$hook_stdin" | grep -q '"error"[[:space:]]*:'; then
-        state="failure"
-    elif printf '%s' "$hook_stdin" | grep -q '"tool_name"[[:space:]]*:[[:space:]]*"Bash"' \
-      && printf '%s' "$hook_stdin" | grep -q '"exitCode"[[:space:]]*:[[:space:]]*[1-9]'; then
+    if _classify_tool_failure; then
         state="failure"
     fi
 fi

@@ -181,6 +181,31 @@ def test_tool_detects_bash_nonzero_exit(env):
     assert _lines(env.state_path())[0] == "failure"
 
 
+def test_tool_ignores_error_text_inside_a_response_string(env):
+    # 工具读过一份内容含 "error": 的文件；转义后的文本不是失败信号
+    env.write_bind()
+    payload = _payload(
+        tool_response={"content": 'line 1\n{"error": "boom"}\nline 3'})
+    assert env.run("tool", payload).returncode == 0
+    assert _lines(env.state_path())[0] == "running"
+
+
+def test_tool_ignores_error_key_outside_tool_response(env):
+    # 只有 tool_response 里的字段才算结果；请求参数里出现 error 不算
+    env.write_bind()
+    payload = _payload(tool_input={"error": "validation hint"},
+                       tool_response={"content": "ok"})
+    assert env.run("tool", payload).returncode == 0
+    assert _lines(env.state_path())[0] == "running"
+
+
+def test_tool_ignores_exit_code_from_a_non_bash_tool(env):
+    env.write_bind()
+    payload = _payload(tool_name="Read", tool_response={"exitCode": 2})
+    assert env.run("tool", payload).returncode == 0
+    assert _lines(env.state_path())[0] == "running"
+
+
 def test_tool_without_bind_is_silent(env):
     result = env.run("tool", _payload())
     assert result.returncode == 0
