@@ -36,7 +36,10 @@ function Assert-Eq {
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $ScriptRoot)
 $Resolver = Join-Path $RepoRoot 'resolve.ps1'
+$ResolverLib = Join-Path $RepoRoot 'resolve-lib.ps1'
 if (-not (Test-Path -LiteralPath $Resolver)) { Write-Output ('FATAL: resolver not found at ' + $Resolver); exit 2 }
+if (-not (Test-Path -LiteralPath $ResolverLib)) { Write-Output ('FATAL: resolver lib not found at ' + $ResolverLib); exit 2 }
+. $ResolverLib
 
 $PwshExe = Join-Path $PSHOME (Split-Path -Leaf (Get-Process -Id $PID).Path)
 $CbCmd = 'node.exe C:\Users\someone\AppData\Roaming\npm\node_modules\@tencent-ai\codebuddy-code\dist\index.js --serve'
@@ -101,11 +104,34 @@ function Read-Ini {
 }
 
 function Get-NoSpawn {
+    # In-process claim. The lib writes the anchor because CreateNew is the mutex;
+    # the bind lines it returns are written here, since emit-the-bind is the
+    # shell's effect. Field names mirror the CLI's -NoSpawn JSON.
     param([string]$Snapshot, [string]$StateDir, [string]$SessionId = 'sess-1')
-    $r = Invoke-Resolver @('-Snapshot', $Snapshot, '-StateDir', $StateDir, '-Cwd', 'D:/work/proj', '-SessionId', $SessionId, '-NoSpawn')
-    $j = $null
-    try { $j = $r.Text | ConvertFrom-Json } catch { $j = $null }
-    return [pscustomobject]@{ ExitCode = $r.ExitCode; Text = $r.Text; Json = $j }
+    $snap = Get-Procs -Snapshot $Snapshot
+    $d = Get-ResolutionDecision -Snap $snap -StateDir $StateDir -SessionId $SessionId -Cwd 'D:/work/proj' -Claim
+    if (-not (Test-Path -LiteralPath $StateDir)) { [void](New-Item -ItemType Directory -Path $StateDir -Force) }
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($d.bind_path, (($d.bind_lines -join ([char]10)) + [string][char]10), $utf8)
+    $j = [pscustomobject]@{
+        session_id  = $d.session_id
+        pid         = $d.pid
+        creation_ft = $d.creation_ft
+        hwnd        = $d.hwnd
+        owner_pid   = $d.owner_pid
+        owner_ft    = $d.owner_ft
+        project     = $d.project
+        cwd         = $d.cwd
+        degraded    = $d.degraded
+        bind_path   = $d.bind_path
+        claim       = $d.claim
+        nonce       = $d.nonce
+        anchor      = $d.anchor
+        task        = $d.task
+        spawned     = $false
+        hwnd_source = $d.hwnd_source
+    }
+    return [pscustomobject]@{ ExitCode = 0; Text = ''; Json = $j }
 }
 
 function Invoke-Tests {
@@ -214,8 +240,11 @@ function Invoke-Tests {
     $tool = Join-Path $d 'tool'
     [void](New-Item -ItemType Directory -Path $tool -Force)
     # a resolver copy with no traffic_light.py/.exe beside it: Start-Drawer cannot
-    # build a command, so the launch must fail before anything is registered
+    # build a command, so the launch must fail before anything is registered.
+    # The decision module travels with the shell - a release missing it would
+    # break every session, so the copy is part of this fixture.
     Copy-Item -LiteralPath $Resolver -Destination (Join-Path $tool 'resolve.ps1')
+    Copy-Item -LiteralPath (Join-Path $RepoRoot 'resolve-lib.ps1') -Destination (Join-Path $tool 'resolve-lib.ps1')
     $snap = Join-Path $d 'snap.json'
     Write-Snapshot -Path $snap -SelfPid 5000 -Hwnd 987654321
     $r = Invoke-ResolveAt -Path (Join-Path $tool 'resolve.ps1') -ArgList @('-Snapshot', $snap, '-StateDir', $state, '-Cwd', 'D:/work/proj', '-SessionId', 's8', '-NoSpawn')
@@ -278,11 +307,11 @@ function Invoke-Tests {
     ) | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tasksFile -Encoding UTF8
 
     $before = Get-DirState $state
-    $r = Invoke-Resolver @('-Snapshot', $snap, '-StateDir', $state, '-GcOnly', '-DryRun', '-TasksFile', $tasksFile)
-    $acts = @()
-    try { $acts = @(($r.Text | ConvertFrom-Json).gc) } catch { $acts = @() }
+    $snapObj = Get-Procs -Snapshot $snap
+    $byPid = @{}
+    foreach ($p in $snapObj.List) { $byPid[$p.Pid] = $p }
+    $acts = @(Get-GcPlan -Dir $state -TaskNames (Read-TaskList $tasksFile) -Snap $snapObj -ByPid $byPid)
     $joined = $acts -join ','
-    Assert-Eq 'dry-run exit code' $r.ExitCode 0
 
     Assert-True 'task backed by a fresh anchor survives' (-not ($acts -contains 'task:traffic-light-w111')) $joined
     Assert-True 'task backed by a fresh anchor (object form) survives' (-not ($acts -contains 'task:traffic-light-w555')) $joined
@@ -320,9 +349,7 @@ function Invoke-Tests {
 
     # second pass: the task list the scheduler would show after the first GC
     '["traffic-light-w111","traffic-light-w555"]' | Set-Content -LiteralPath $tasksFile -Encoding UTF8
-    $r = Invoke-Resolver @('-Snapshot', $snap, '-StateDir', $state, '-GcOnly', '-DryRun', '-TasksFile', $tasksFile)
-    $acts2 = @()
-    try { $acts2 = @(($r.Text | ConvertFrom-Json).gc) } catch { $acts2 = @() }
+    $acts2 = @(Get-GcPlan -Dir $state -TaskNames (Read-TaskList $tasksFile) -Snap $snapObj -ByPid $byPid)
     Assert-Eq 'GC is idempotent' ($acts2 -join ',') ''
 
     # ---------------------------------------------------------------- E2 ----
@@ -339,16 +366,15 @@ function Invoke-Tests {
     # CIM only reports millisecond precision while GetProcessTimes is exact:
     # the same process legitimately differs by a handful of ticks.
     Set-Content -LiteralPath $stateFile -Value @('thinking', 'D:/work/proj', [string]($liveFt + 7)) -Encoding UTF8
-    $r = Invoke-Resolver @('-StateDir', $state2, '-GcOnly', '-DryRun', '-TasksFile', $noTasks)
-    $skewActs = @()
-    try { $skewActs = @(($r.Text | ConvertFrom-Json).gc) } catch { $skewActs = @() }
+    $realSnap = Get-Procs
+    $realByPid = @{}
+    foreach ($p in $realSnap.List) { $realByPid[$p.Pid] = $p }
+    $skewActs = @(Get-GcPlan -Dir $state2 -TaskNames (Read-TaskList $noTasks) -Snap $realSnap -ByPid $realByPid)
     Assert-True 'state with a few ticks of skew is kept' (-not ($skewActs -contains ('file:' + $livePid + '.state'))) ($skewActs -join ',')
 
     # Two seconds later can only be a reused pid.
     Set-Content -LiteralPath $stateFile -Value @('thinking', 'D:/work/proj', [string]($liveFt + 20000000)) -Encoding UTF8
-    $r = Invoke-Resolver @('-StateDir', $state2, '-GcOnly', '-DryRun', '-TasksFile', $noTasks)
-    $reuseActs = @()
-    try { $reuseActs = @(($r.Text | ConvertFrom-Json).gc) } catch { $reuseActs = @() }
+    $reuseActs = @(Get-GcPlan -Dir $state2 -TaskNames (Read-TaskList $noTasks) -Snap $realSnap -ByPid $realByPid)
     Assert-True 'state with a 2s skew is treated as pid reuse' ($reuseActs -contains ('file:' + $livePid + '.state')) ($reuseActs -join ',')
 }
 

@@ -56,12 +56,14 @@ def _install_sh():
 
 def test_build_spec_bundles_resolver_and_hooks():
     bundled = _datas_by_dest()
-    # 四类运行时资源：解析脚本、探针、hook 入口目录、hook 模板
+    # 五类运行时资源：解析外壳、解析决策模块、探针、hook 入口目录、hook 模板
     assert bundled.get("resolve.ps1") == "."
+    assert bundled.get("resolve-lib.ps1") == "."
     assert bundled.get("probe.ps1") == "."
     assert bundled.get("hooks") == "hooks"
     assert bundled.get(".codebuddy-hooks.json") == "."
     assert (REPO / "resolve.ps1").is_file()
+    assert (REPO / "resolve-lib.ps1").is_file()
     assert (REPO / "probe.ps1").is_file()
     assert (REPO / "hooks" / "traffic-light.sh").is_file()
     assert (REPO / "hooks" / "run-hidden.pyw").is_file()
@@ -179,9 +181,23 @@ def test_readme_has_no_removed_project_feature():
         assert stale not in text, stale
 
 
+def _resolver_text():
+    # 解析器拆成决策模块 + 效应外壳，这两条禁令对两个文件都成立
+    return "\n".join(
+        (REPO / name).read_text(encoding="utf-8")
+        for name in ("resolve.ps1", "resolve-lib.ps1")
+    )
+
+
 def test_resolver_never_attaches_a_console():
     """AttachConsole 到 ConPTY 会让 Windows 新建终端窗口（闪一下黑框），禁止使用。"""
-    text = (REPO / "resolve.ps1").read_text(encoding="utf-8")
+    text = _resolver_text()
     assert "::AttachConsole" not in text
     assert "::GetConsoleWindow" not in text
     assert "::FreeConsole" not in text
+
+
+def test_resolver_never_reads_the_foreground_window():
+    """多终端时前台是正在打字的那个窗口，拿它认灯会把别的会话绑到别人的灯上。"""
+    text = _resolver_text()
+    assert "::GetForegroundWindow" not in text

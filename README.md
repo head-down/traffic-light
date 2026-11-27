@@ -55,7 +55,7 @@ install.bat --global
 install.bat D:\DevelopTools\my-project
 ```
 
-发布包已包含 `resolve.ps1`、`probe.ps1`、`hooks/` 与 hook 模板，不需要安装 Python，也不需要额外下载脚本。
+发布包已包含 `resolve.ps1`、`resolve-lib.ps1`、`probe.ps1`、`hooks/` 与 hook 模板，不需要安装 Python，也不需要额外下载脚本。
 
 ### 源码版
 
@@ -90,9 +90,11 @@ EXE 与源码两种方式都只需配一次 hooks，之后每次打开 CodeBuddy
 
 CodeBuddy 的六个事件统一走 `hooks/traffic-light.sh <event>`，由 GUI 子系统宿主
 （`traffic_light.exe --hook` 或 `pythonw hooks/run-hidden.pyw`）拉起，里面的 bash 用
-`CREATE_NO_WINDOW` 启动，所以**每次事件不会弹控制台黑框**。窗口来源也只用桌面 API：
-优先当前前台终端窗口，其次桌面上唯一的一个；已有绑定且窗口仍然有效时直接复用——
-不走 `AttachConsole`，因为对 ConPTY 控制台 attach 会让 Windows 临时新建一个终端窗口。
+`CREATE_NO_WINDOW` 启动，所以**每次事件不会弹控制台黑框**。窗口只从本会话自己的进程链上
+认：窗格里的 shell 独占一个控制台窗口（ConPTY 是 `PseudoConsoleWindow`，经典控制台是 conhost
+的 `ConsoleWindowClass`），它的 `GW_OWNER` 就是那块屏的终端窗口。既不 attach 控制台（对
+ConPTY attach 会让 Windows 新建一个终端窗口），也不看前台窗口（多终端时前台永远是正在打字的
+那个，其余会话会被绑到别人的灯上）。链上认不出时先沿用原绑定，桌面只有一个终端窗口才兜底用它。
 
 ```
 SessionStart      → 解析会话进程/窗口 → 写绑定 → 抢窗/拉灯 → GC
@@ -164,7 +166,7 @@ cp traffic-light/.codebuddy-hooks.json ~/.codebuddy/settings.json
 
 - PyQt5 绘制无边框透明窗口，`SetWindowPos(HWND_TOPMOST)` + 循环抬升保持置顶，`WS_EX_NOACTIVATE` 不抢焦点
 - QPainter 抗锯齿圆形 + QRadialGradient 三层霓虹发光，玻璃拟态面板
-- PowerShell 解析器（`resolve.ps1`）是 hwnd 的唯一来源：短命进程内 `FreeConsole → AttachConsole` 取窗口，失败则写 `degraded=1` 进降级灯
+- PowerShell 解析器分两层：`resolve-lib.ps1` 只做决策（认进程、认窗口、算绑定与 GC 计划），`resolve.ps1` 只做效应（写绑定、注册并拉起任务、执行清理）。hwnd 的唯一来源是本会话进程链上的控制台窗口，经 `GW_OWNER` 得到终端窗口；解析失败写 `degraded=1` 进降级灯
 - 所有文件写入都是"同目录临时文件 + 重命名"原子替换，不需要文件锁
 - drawer 每 tick 刷新锚文件心跳，按 nonce 识别"被判死的旧 drawer 醒来"，避免双灯
 - 窗口尺寸/位置取 `GetWindowPlacement` 的还原矩形（最小化窗口的 `GetWindowRect` 只有 159×27 桩尺寸，会误判）

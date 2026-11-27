@@ -6,6 +6,10 @@ Run:
 
 Exit code 0 means every assertion passed. Only snapshots and temp directories are
 fed in: no real process is inspected and no real window is touched.
+
+Most cases call Get-ResolutionDecision / Get-GcPlan in-process (the lib is
+dot-sourced below); cases that assert effects the shell owns - writing the bind,
+applying GC, spawning - still go through the CLI, plus SM1 pins the CLI contract.
 #>
 [CmdletBinding()]
 param()
@@ -34,7 +38,10 @@ function Assert-Eq {
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $ScriptRoot)
 $Resolver = Join-Path $RepoRoot 'resolve.ps1'
+$ResolverLib = Join-Path $RepoRoot 'resolve-lib.ps1'
 if (-not (Test-Path -LiteralPath $Resolver)) { Write-Output ('FATAL: resolver not found at ' + $Resolver); exit 2 }
+if (-not (Test-Path -LiteralPath $ResolverLib)) { Write-Output ('FATAL: resolver lib not found at ' + $ResolverLib); exit 2 }
+. $ResolverLib
 
 $PwshExe = Join-Path $PSHOME (Split-Path -Leaf (Get-Process -Id $PID).Path)
 $CbCmd = 'node.exe C:\Users\someone\AppData\Roaming\npm\node_modules\@tencent-ai\codebuddy-code\dist\index.js --serve'
@@ -58,10 +65,11 @@ function New-Case {
 }
 
 function Write-Snapshot {
-    param([string]$Path, [int]$SelfPid, [string]$ProxyUrl = '', $Listeners = $null, [object[]]$Procs)
+    param([string]$Path, [int]$SelfPid, [string]$ProxyUrl = '', $Listeners = $null, [object[]]$Procs, [object[]]$Windows = $null)
     $o = [ordered]@{ selfPid = $SelfPid; procs = $Procs }
     if ($ProxyUrl) { $o.proxyUrl = $ProxyUrl }
     if ($Listeners) { $o.listeners = $Listeners }
+    if ($Windows) { $o.windows = $Windows }
     ([pscustomobject]$o | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
@@ -77,11 +85,26 @@ function Read-Bind {
 }
 
 function Get-DryRun {
+    # In-process decision, shaped exactly like the CLI's -DryRun JSON so the
+    # assertions below read the same fields either way.
     param([string]$Snapshot, [string]$StateDir, [string]$Cwd = 'D:/work/proj', [string]$SessionId = 'sess-1')
-    $r = Invoke-Resolver @('-Snapshot', $Snapshot, '-StateDir', $StateDir, '-Cwd', $Cwd, '-SessionId', $SessionId, '-DryRun')
-    $j = $null
-    try { $j = $r.Text | ConvertFrom-Json } catch { $j = $null }
-    return [pscustomobject]@{ ExitCode = $r.ExitCode; Text = $r.Text; Json = $j }
+    $snap = Get-Procs -Snapshot $Snapshot
+    $d = Get-ResolutionDecision -Snap $snap -StateDir $StateDir -SessionId $SessionId -Cwd $Cwd
+    $j = [pscustomobject]@{
+        session_id  = $d.session_id
+        pid         = $d.candidate_pid
+        creation_ft = $d.candidate_ft
+        hwnd        = $d.hwnd
+        owner_pid   = $d.owner_pid
+        owner_ft    = $d.owner_ft
+        project     = $d.project
+        cwd         = $d.cwd
+        degraded    = $d.degraded
+        bind_path   = $d.bind_path
+        pid_source  = $d.pid_source
+        hwnd_source = $d.hwnd_source
+    }
+    return [pscustomobject]@{ ExitCode = 0; Text = ''; Json = $j }
 }
 
 function Invoke-Tests {
@@ -154,10 +177,10 @@ function Invoke-Tests {
     Set-Content -LiteralPath (Join-Path $state 'legacy.state') -Value @('idle', 'D:/work/proj') -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $state 'proj.pid') -Value '999' -Encoding UTF8
 
-    $r = Invoke-Resolver @('-Snapshot', $snap, '-StateDir', $state, '-GcOnly', '-DryRun')
-    Assert-Eq 'exit code' $r.ExitCode 0
-    $acts = @()
-    try { $acts = @(($r.Text | ConvertFrom-Json).gc) } catch { $acts = @() }
+    $snapObj = Get-Procs -Snapshot $snap
+    $byPid = @{}
+    foreach ($p in $snapObj.List) { $byPid[$p.Pid] = $p }
+    $acts = @(Get-GcPlan -Dir $state -TaskNames $null -Snap $snapObj -ByPid $byPid)
     $joined = $acts -join ','
     Assert-True 'pid-reused bind is collected' ($acts -contains 'file:reborn.bind') $joined
     Assert-True 'matching bind is kept' (-not ($acts -contains 'file:same.bind')) $joined
@@ -301,6 +324,120 @@ function Invoke-Tests {
     Assert-Eq 'identity stays unknown' $b['pid'] '0'
     Assert-Eq 'hwnd is kept' $b['hwnd'] '424242'
     Assert-Eq 'degraded is not flagged without a pid' $b['degraded'] '0'
+
+    # ---------------------------------------------------------------- D1 ----
+    Write-Output 'D1  two sessions in two windows never share one hwnd'
+    $d = New-Case 'd1'
+    $windows = @(
+        @{ hwnd = 7001; pid = 3100; 'class' = 'PseudoConsoleWindow'; owner = 7100 }
+        @{ hwnd = 7100; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+        @{ hwnd = 7002; pid = 3200; 'class' = 'PseudoConsoleWindow'; owner = 7200 }
+        @{ hwnd = 7200; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+        @{ hwnd = 7300; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+    )
+    $snapA = Join-Path $d 'a.json'
+    Write-Snapshot -Path $snapA -SelfPid 5000 -Windows $windows -Procs @(
+        @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 3100; name = 'bash.exe'; creationFt = '900'; commandLine = 'bash -c hook'; hwnd = 0 }
+        @{ processId = 3100; parentProcessId = 9000; name = 'cmd.exe'; creationFt = '850'; commandLine = 'cmd.exe'; hwnd = 0 }
+        @{ processId = 3000; parentProcessId = 3100; name = 'node.exe'; creationFt = '700'; commandLine = $CbCmd; hwnd = 0 }
+        @{ processId = 9000; parentProcessId = 0; name = 'explorer.exe'; creationFt = '600'; commandLine = 'explorer.exe'; hwnd = 0 }
+    )
+    $rA = Get-DryRun -Snapshot $snapA -StateDir (Join-Path $d 'state-a') -SessionId 'pane-a'
+    if ($rA.Json) {
+        Assert-Eq 'pane A resolves its own window' $rA.Json.hwnd 7100
+        Assert-Eq 'pane A window comes from the chain' $rA.Json.hwnd_source 'chain'
+        Assert-Eq 'pane A is not degraded' $rA.Json.degraded 0
+    }
+
+    $snapB = Join-Path $d 'b.json'
+    Write-Snapshot -Path $snapB -SelfPid 6000 -Windows $windows -Procs @(
+        @{ processId = 6000; parentProcessId = 4500; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 4500; parentProcessId = 3200; name = 'bash.exe'; creationFt = '900'; commandLine = 'bash -c hook'; hwnd = 0 }
+        @{ processId = 3200; parentProcessId = 9000; name = 'cmd.exe'; creationFt = '860'; commandLine = 'cmd.exe'; hwnd = 0 }
+        @{ processId = 3500; parentProcessId = 3200; name = 'node.exe'; creationFt = '750'; commandLine = $CbCmd; hwnd = 0 }
+        @{ processId = 9000; parentProcessId = 0; name = 'explorer.exe'; creationFt = '600'; commandLine = 'explorer.exe'; hwnd = 0 }
+    )
+    $rB = Get-DryRun -Snapshot $snapB -StateDir (Join-Path $d 'state-b') -SessionId 'pane-b'
+    if ($rB.Json -and $rA.Json) {
+        Assert-Eq 'pane B resolves its own window' $rB.Json.hwnd 7200
+        Assert-True 'the two panes do not collapse onto one lamp' ($rA.Json.hwnd -ne $rB.Json.hwnd)
+    }
+
+    # ---------------------------------------------------------------- D2 ----
+    Write-Output 'D2  two panes of one window aggregate onto that window'
+    $d = New-Case 'd2'
+    $ttys = @(
+        @{ hwnd = 7003; pid = 3300; 'class' = 'PseudoConsoleWindow'; owner = 7300 }
+        @{ hwnd = 7004; pid = 3400; 'class' = 'PseudoConsoleWindow'; owner = 7300 }
+        @{ hwnd = 7300; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+    )
+    $snapC = Join-Path $d 'c.json'
+    Write-Snapshot -Path $snapC -SelfPid 5000 -Windows $ttys -Procs @(
+        @{ processId = 5000; parentProcessId = 3300; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 3000; parentProcessId = 3300; name = 'node.exe'; creationFt = '700'; commandLine = $CbCmd; hwnd = 0 }
+        @{ processId = 3300; parentProcessId = 9000; name = 'cmd.exe'; creationFt = '850'; commandLine = 'cmd.exe'; hwnd = 0 }
+        @{ processId = 9000; parentProcessId = 0; name = 'explorer.exe'; creationFt = '600'; commandLine = 'explorer.exe'; hwnd = 0 }
+    )
+    $snapD = Join-Path $d 'd.json'
+    Write-Snapshot -Path $snapD -SelfPid 6000 -Windows $ttys -Procs @(
+        @{ processId = 6000; parentProcessId = 3400; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 3600; parentProcessId = 3400; name = 'node.exe'; creationFt = '760'; commandLine = $CbCmd; hwnd = 0 }
+        @{ processId = 3400; parentProcessId = 9000; name = 'cmd.exe'; creationFt = '870'; commandLine = 'cmd.exe'; hwnd = 0 }
+        @{ processId = 9000; parentProcessId = 0; name = 'explorer.exe'; creationFt = '600'; commandLine = 'explorer.exe'; hwnd = 0 }
+    )
+    $rC = Get-DryRun -Snapshot $snapC -StateDir (Join-Path $d 'state-c') -SessionId 'tab-1'
+    $rD = Get-DryRun -Snapshot $snapD -StateDir (Join-Path $d 'state-d') -SessionId 'tab-2'
+    if ($rC.Json -and $rD.Json) {
+        Assert-Eq 'tab 1 lands on the shared window' $rC.Json.hwnd 7300
+        Assert-Eq 'tab 2 lands on the shared window' $rD.Json.hwnd 7300
+    }
+
+    # ---------------------------------------------------------------- D3 ----
+    Write-Output 'D3  an unresolved chain keeps the previous window instead of guessing'
+    $d = New-Case 'd3'
+    $state = Join-Path $d 'state'
+    [void](New-Item -ItemType Directory -Path $state -Force)
+    $snap = Join-Path $d 'snap.json'
+    Write-Snapshot -Path $snap -SelfPid 5000 -Windows @(
+        @{ hwnd = 7400; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+        @{ hwnd = 7500; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+    ) -Procs @(
+        @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 2000; name = 'node.exe'; creationFt = '700'; commandLine = $CbCmd; hwnd = 0 }
+    )
+    Set-Content -LiteralPath (Join-Path $state 's9.bind') -Value @(
+        'session_id=s9', 'pid=2000', 'creation_ft=700', 'hwnd=7400',
+        'hwnd_owner_pid=0', 'hwnd_owner_ft=', 'project=proj', 'cwd=D:/proj', 'updated=1', 'degraded=0'
+    ) -Encoding UTF8
+    $r = Get-DryRun -Snapshot $snap -StateDir $state -SessionId 's9'
+    if ($r.Json) {
+        Assert-Eq 'the live window is kept' $r.Json.hwnd 7400
+        Assert-Eq 'the source is the existing bind' $r.Json.hwnd_source 'bind'
+        Assert-Eq 'the session does not degrade' $r.Json.degraded 0
+    }
+    Assert-True 'no bind file is created outside the dry run' (-not (Test-Path -LiteralPath (Join-Path $state 'probe-x.bind')))
+
+    # ---------------------------------------------------------------- SM1 ----
+    # The shell is the shipped seam the hook calls: one run, full output contract.
+    Write-Output 'SM1  the shell keeps the dry-run JSON contract'
+    $d = New-Case 'sm1'
+    $snap = Join-Path $d 'snap.json'
+    Write-Snapshot -Path $snap -SelfPid 5000 -Procs @(
+        @{ processId = 5000; parentProcessId = 2000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 2000; parentProcessId = 0; name = 'node.exe'; creationFt = '900'; commandLine = $CbCmd; hwnd = 0 }
+    )
+    $r = Invoke-Resolver @('-Snapshot', $snap, '-StateDir', (Join-Path $d 'state'), '-SessionId', 'smoke', '-DryRun')
+    Assert-Eq 'exit code' $r.ExitCode 0
+    $j = $null
+    try { $j = $r.Text | ConvertFrom-Json } catch { $j = $null }
+    Assert-True 'output is JSON' ($null -ne $j) $r.Text
+    if ($j) {
+        foreach ($k in @('session_id', 'pid', 'creation_ft', 'hwnd', 'owner_pid', 'owner_ft', 'project', 'cwd', 'degraded', 'bind_path', 'pid_source', 'hwnd_source')) {
+            Assert-True ('field ' + $k) ($j.PSObject.Properties.Name -contains $k)
+        }
+    }
+    Assert-True 'dry run leaves no state dir behind' (-not (Test-Path -LiteralPath (Join-Path $d 'state')))
 }
 
 try {
