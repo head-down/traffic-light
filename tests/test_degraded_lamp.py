@@ -2,7 +2,7 @@
 
 被测 seam：
   - SessionView(degraded=True).snapshot()  —— 混合绑定过滤 / 同 pid 去重 / 标签素材
-  - degraded_label(view)                  —— 标签 `<project> ?`
+  - lamp_label/lamp_badge(view)           —— 标签 `<project> ?`、不画角标
   - degraded_beat(guard, anchor, n)       —— 降级灯心跳自灭（3 次无会话 → 退出）
   - SessionView(hwnd=...).snapshot()       —— 窗口灯不受降级灯影响
 """
@@ -11,10 +11,9 @@ import os
 from core.drawer import (
     EXIT_IDLE,
     DrawerGuard,
-    badge_count,
     degraded_beat,
-    degraded_label,
 )
+from core.render import lamp_badge, lamp_label
 from core.session_view import InMemorySources, SessionView
 from core.wire import (
     Anchor,
@@ -98,7 +97,7 @@ def test_degraded_view_dedupes_same_pid():
 # 标签 <project> ?
 # ============================================================
 
-def test_degraded_label_marks_project_with_question_mark():
+def test_degraded_lamp_marks_project_with_question_mark():
     snapshot = _view(
         [
             _bind(1, "alpha"),
@@ -109,14 +108,14 @@ def test_degraded_label_marks_project_with_question_mark():
 
     # 主标签取优先级最高（waiting > running）那条会话的项目名
     assert snapshot.state == "waiting"
-    assert degraded_label(snapshot) == "beta ?"
+    assert lamp_label(snapshot) == "beta ?"
 
 
-def test_degraded_label_empty_when_no_sessions():
+def test_degraded_lamp_label_is_empty_without_sessions():
     snapshot = _view([_bind(1, "alpha", degraded=False, hwnd=100)],
                      [_state(1)])
     assert snapshot.count == 0
-    assert degraded_label(snapshot) == ""
+    assert lamp_label(snapshot) == ""
 
 
 # ============================================================
@@ -199,7 +198,7 @@ def test_degraded_lamp_never_draws_a_badge():
         [_state(1), _state(2)],
     )
     assert snapshot.count == 2
-    assert badge_count(snapshot, degraded=True) == 0
+    assert lamp_badge(snapshot) == 0
 
 
 def test_window_lamp_badge_counts_distinct_sessions():
@@ -211,4 +210,4 @@ def test_window_lamp_badge_counts_distinct_sessions():
         degraded=False,
     )
     assert snapshot.count == 2
-    assert badge_count(snapshot, degraded=False) == 2
+    assert lamp_badge(snapshot) == 2

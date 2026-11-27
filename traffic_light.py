@@ -62,9 +62,7 @@ from core.drawer import (
     HEARTBEAT_MS,
     TICK_MS,
     DrawerGuard,
-    badge_count,
     degraded_beat,
-    degraded_label,
 )
 from core.wire import (
     Anchor,
@@ -77,6 +75,7 @@ from core.wire import (
 from core.light_panel import LightPanel
 from core.overlay_window import TrafficLightWindow
 from core.position_engine import PositionEngine
+from core.render import LampRenderer
 from core.session_view import FileSystemSources, SessionView
 from core.terminal_adapter import TerminalAdapter
 from core.terminal_tracker import get_window_owner, is_window
@@ -118,13 +117,13 @@ class _DrawerLoop:
         self._guard = guard
         self._anchor_file = anchor_file
         self._window = window
-        self._panel = panel
         self._degraded = degraded
         if degraded:
             self._view = SessionView(FileSystemSources(state_dir),
                                      degraded=True)
         else:
             self._view = SessionView(FileSystemSources(state_dir), hwnd=hwnd)
+        self._renderer = LampRenderer(panel, window)
         self._live_count = 0
         self._stopped = False
 
@@ -144,13 +143,7 @@ class _DrawerLoop:
     def _render(self):
         view = self._view.snapshot()
         self._live_count = view.count
-        self._panel.set_state(view.state)
-        if self._degraded:
-            self._panel.set_project_name(degraded_label(view))
-        else:
-            self._panel.set_project_name(view.label)
-        self._panel.set_badge(badge_count(view, self._degraded))
-        self._window.set_glow_color(view.state)
+        self._renderer.render(view)
 
     def _beat(self):
         # 先验 nonce，再刷 mtime：被取代的 drawer 不能替新锚续命

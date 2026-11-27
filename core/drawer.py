@@ -1,8 +1,8 @@
-"""一窗一灯的 drawer 纯逻辑：nonce 校验、自灭判定、降级灯标签。
+"""一窗一灯的 drawer 纯逻辑：nonce 校验、自灭判定。
 
 这里不做任何 Qt / 窗口操作，也不碰文件，便于用纯逻辑测试覆盖判定；运行期
 胶水在 traffic_light.py，锚的格式与读写（.traffic-light-states/w<hwnd>.win）
-在 core/wire.py。drawer 只判定自己该死。
+在 core/wire.py，视图怎么画在 core/render.py。drawer 只判定自己该死。
 """
 from dataclasses import dataclass
 
@@ -91,21 +91,7 @@ class DrawerGuard:
 # 降级灯（全机一盏，锚 w0.win）
 # ============================================================
 
-def degraded_label(view):
-    """降级灯主标签：`<project> ?`；无降级会话时不显示标签。"""
-    if view is None or not view.count:
-        return ""
-    return ("%s ?" % view.label) if view.label else "?"
-
-
 def degraded_beat(guard, anchor, live_count):
     """降级灯心跳：没有可跟随的窗口与 owner，只按降级会话数判自灭。"""
     return guard.check(anchor, window_alive=True, owner=None,
                        live_count=live_count)
-
-
-def badge_count(view, degraded=False):
-    """角标数字：窗口灯数不同会话；降级灯是全机一盏，不画 ·N。"""
-    if degraded or view is None:
-        return 0
-    return view.count
