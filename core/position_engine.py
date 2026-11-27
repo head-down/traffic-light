@@ -3,6 +3,7 @@
 
 从 traffic_light.py 的 _tick 闭包提取。
 负责：owner 绑定、可见性跟踪、DPI 坐标转换。
+终端 hwnd 由调用方（drawer 参数）提供，引擎不做终端发现。
 
 可见性双保险：
   1. GW_OWNER (SetWindowLongPtrW) — z-order 跟随，终端最小化时自动隐藏
@@ -12,6 +13,8 @@
 import ctypes
 from PyQt5.QtCore import QTimer, QPoint
 from PyQt5.QtWidgets import QApplication
+
+from core.terminal_tracker import get_window_rect, is_window_visible_and_normal
 
 _user32 = ctypes.windll.user32
 
@@ -32,14 +35,15 @@ class PositionEngine:
     _tick()    — 每个 16ms tick：owner 绑定 → 可见性 → 位置更新
     """
 
-    def __init__(self, app, window, terminal):
+    def __init__(self, app, window, hwnd):
         self._app = app
         self._window = window
-        self._terminal = terminal
+        self._hwnd = int(hwnd)
         self._owner_set = False
         self._hwnd_cache = None
         self._term_visible = False
-        self._first_discovery = True
+        self._term_rect = None
+        self._first_tick = True
 
         self._timer = QTimer(app)
         self._timer.timeout.connect(self._tick)
@@ -61,7 +65,7 @@ class PositionEngine:
         """把灯窗口的 owner 设为终端窗口（z-order 跟随）。
         绑定后 Windows 自动维护显隐/最小化/销毁。"""
         light_hwnd = self._get_light_hwnd()
-        owner_hwnd = self._terminal.hwnd
+        owner_hwnd = self._hwnd
 
         GW_OWNER = 4
         current_owner = _user32.GetWindow(light_hwnd, GW_OWNER)
@@ -91,16 +95,10 @@ class PositionEngine:
 
     def _tick(self):
         """16ms 高频轮询：owner 绑定 → 可见性 → 位置跟踪"""
-        self._terminal.discover()
-
-        if not self._terminal.found:
-            self._show_at_default()
-            return
-
-        # 首次发现终端：强制标记可见 + 重置 owner
+        # 首次跟踪：强制标记可见 + 重置 owner
         # （匹配 pre-refactor 行为：不查 IsWindowVisible，直接标记可见）
-        if self._first_discovery:
-            self._first_discovery = False
+        if self._first_tick:
+            self._first_tick = False
             self._term_visible = True
             self._owner_set = False
 
@@ -110,45 +108,50 @@ class PositionEngine:
                 self._owner_set = True
                 print(
                     f"[SignalLight] owner bound: light→terminal "
-                    f"(hwnd={self._terminal.hwnd})",
+                    f"(hwnd={self._hwnd})",
                     flush=True,
                 )
 
         # 可见性跟踪：终端最小化时隐藏灯，还原时显示
         # （GW_OWNER 对 conhost 窗口可能失效，手动 show/hide 是双保险）
-        vis_changed = self._terminal.update_visibility()
-        if vis_changed:
-            if not self._terminal.visible:
+        if self._update_visibility():
+            if not self._term_visible:
                 if self._window.isVisible():
                     self._window.hide()
                 return
             # 可见性恢复 → 强制 reposition
-            self._terminal._rect = None
+            self.invalidate_rect()
 
-        if not self._terminal.visible:
+        if not self._term_visible:
             return
 
         # 位置跟踪：rect 变化时重新定位
-        if not self._terminal.update_rect():
+        if not self._update_rect():
             return
 
         self._position_at_terminal()
 
-    def _show_at_default(self):
-        """未找到终端 → 显示在屏幕右下角"""
-        if not self._window.isVisible():
-            screen = QApplication.primaryScreen()
-            if screen:
-                geom = screen.availableGeometry()
-                self._window.move(
-                    geom.right() - self._window.WIDTH - 20,
-                    geom.bottom() - self._window.HEIGHT - 20,
-                )
-            self._window.show()
+    # ---- 终端窗口状态（缓存，不重复调 Win32） ----
+
+    def _update_visibility(self):
+        """返回 True 表示可见性变化。"""
+        prev = self._term_visible
+        self._term_visible = is_window_visible_and_normal(self._hwnd)
+        return self._term_visible != prev
+
+    def _update_rect(self):
+        """返回 True 表示位置/尺寸变化。"""
+        prev = self._term_rect
+        self._term_rect = get_window_rect(self._hwnd)
+        return self._term_rect != prev
+
+    def invalidate_rect(self):
+        """丢弃矩形缓存，下一次 tick 必定重新定位。"""
+        self._term_rect = None
 
     def _position_at_terminal(self):
         """根据终端窗口位置 + DPI 计算灯窗口坐标"""
-        rect = self._terminal.rect
+        rect = self._term_rect
         if rect is None:
             return
 
@@ -164,6 +167,16 @@ class PositionEngine:
         y_phys = rect[3] + 8
         x = int(x_phys / dpr)
         y = int(y_phys / dpr)
+
+        # 越界保护：终端最大化或贴着屏幕底边时，"终端下方"会落到屏幕外，
+        # 此时改叠到终端内侧右下角，最后再夹回可用屏幕区域
+        avail = screen.availableGeometry()
+        w, h = self._window.WIDTH, self._window.HEIGHT
+        if y + h > avail.bottom() - 4:
+            x = int((rect[2] - w * dpr) // dpr) - 24
+            y = int((rect[3] - h * dpr) // dpr) - 24
+        x = max(avail.left() + 8, min(x, avail.right() - w - 8))
+        y = max(avail.top() + 8, min(y, avail.bottom() - h - 8))
 
         if not self._window.isVisible():
             self._window.show()

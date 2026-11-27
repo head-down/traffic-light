@@ -59,6 +59,15 @@ class TrafficLightWindow(QWidget):
             y = geom.bottom() - self.HEIGHT - 20
             self.move(x, y)
 
+    def enable_free_floating(self):
+        """降级灯：始终置顶、不抢焦点、不进任务栏（WS_EX_NOACTIVATE）。"""
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowStaysOnTopHint
+            | Qt.WindowDoesNotAcceptFocus
+        )
+        self._set_ex_toolwindow()
+
     def _set_ex_toolwindow(self):
         """设置 WS_EX_TOOLWINDOW 扩展样式，隐藏任务栏图标但不触发系统音效"""
         import ctypes

@@ -38,3 +38,13 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python -m pytest tests/ -v --tb=short
+
+      # 解析器测试此前只能手工跑：每个断言都起一个 powershell 子进程。决策模块
+      # 拆出来之后它们在本进程内跑完，才付得起流水线的代价。
+      - name: Resolver decision tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps/test-resolve.ps1
+
+      - name: Resolver claim and GC tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps/test-resolve-claim.ps1
