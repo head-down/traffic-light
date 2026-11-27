@@ -62,7 +62,6 @@ from core.drawer import (
     HEARTBEAT_MS,
     TICK_MS,
     DrawerGuard,
-    degraded_beat,
 )
 from core.wire import (
     Anchor,
@@ -77,7 +76,6 @@ from core.overlay_window import TrafficLightWindow
 from core.position_engine import PositionEngine
 from core.render import LampRenderer
 from core.session_view import FileSystemSources, SessionView
-from core.terminal_adapter import TerminalAdapter
 from core.terminal_tracker import get_window_owner, is_window
 
 
@@ -111,18 +109,15 @@ class _DrawerLoop:
     """渲染 tick（300ms）+ 心跳 tick（1000ms）。"""
 
     def __init__(self, app, hwnd, guard, anchor_file, state_dir,
-                 window, panel, degraded=False):
+                 window, panel):
         self._app = app
         self._hwnd = hwnd
         self._guard = guard
         self._anchor_file = anchor_file
         self._window = window
-        self._degraded = degraded
-        if degraded:
-            self._view = SessionView(FileSystemSources(state_dir),
-                                     degraded=True)
-        else:
-            self._view = SessionView(FileSystemSources(state_dir), hwnd=hwnd)
+        # 没有窗口句柄就是全机降级灯；这一个判据取代了独立的降级布尔
+        self._degraded = not hwnd
+        self._view = SessionView(FileSystemSources(state_dir), hwnd=hwnd)
         self._renderer = LampRenderer(panel, window)
         self._live_count = 0
         self._stopped = False
@@ -150,14 +145,13 @@ class _DrawerLoop:
         anchor = read_anchor(self._anchor_file)
         if self._degraded:
             # 降级灯没有窗口与 owner 可校验，只按降级会话数判自灭
-            decision = degraded_beat(self._guard, anchor, self._live_count)
+            window_alive, owner = True, None
         else:
-            decision = self._guard.check(
-                anchor,
-                window_alive=is_window(self._hwnd),
-                owner=get_window_owner(self._hwnd),
-                live_count=self._live_count,
-            )
+            window_alive = is_window(self._hwnd)
+            owner = get_window_owner(self._hwnd)
+        decision = self._guard.check(
+            anchor, window_alive=window_alive, owner=owner,
+            live_count=self._live_count)
         if decision is None:
             touch_anchor(self._anchor_file)
             return
@@ -240,11 +234,11 @@ def main(argv=None):
         window.show()
     else:
         # 跟随定位：hwnd 来自命令行，不做终端发现
-        position = PositionEngine(app, window, TerminalAdapter(hwnd))
+        position = PositionEngine(app, window, hwnd)
         position.start()
 
     drawer = _DrawerLoop(app, hwnd, guard, anchor_file, state_dir,
-                         window, panel, degraded=degraded)
+                         window, panel)
     drawer.start()
 
     try:

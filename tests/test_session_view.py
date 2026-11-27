@@ -43,11 +43,10 @@ def _sources(binds=(), states=()):
                            states={s.pid: s for s in states})
 
 
-def _view(sources, hwnd=100, degraded=False, alive=None, now=NOW):
+def _view(sources, hwnd=100, alive=None, now=NOW):
     return SessionView(
         sources,
         hwnd=hwnd,
-        degraded=degraded,
         process_checker=alive if alive is not None else (lambda pid, ft: True),
         now=now,
     )
@@ -215,7 +214,7 @@ def test_degraded_view_contains_only_degraded_binds():
          _bind(2, hwnd=0, project="lost", degraded=True)],
         [_state(1, "running"), _state(2, "failure")],
     )
-    degraded = _view(sources, hwnd=None, degraded=True).snapshot()
+    degraded = _view(sources, hwnd=0).snapshot()
     window = _view(sources, hwnd=100).snapshot()
 
     assert degraded.degraded is True
@@ -228,16 +227,17 @@ def test_degraded_view_contains_only_degraded_binds():
     assert window.label == "win"
 
 
-def test_degraded_view_ignores_hwnd():
+def test_degraded_view_only_takes_windowless_binds():
+    # 降级灯只认 hwnd==0；字段与 hwnd 不一致时以 hwnd 为准
     sources = _sources([_bind(1, hwnd=555, degraded=True)],
                        [_state(1, "thinking")])
-    snap = _view(sources, hwnd=None, degraded=True).snapshot()
-    assert snap.count == 1
-    assert snap.state == "thinking"
+    snap = _view(sources, hwnd=0).snapshot()
+    assert snap.count == 0
+    assert snap.degraded is True
 
 
 def test_empty_degraded_view_is_idle_and_flagged():
-    snap = _view(_sources(), hwnd=None, degraded=True).snapshot()
+    snap = _view(_sources(), hwnd=0).snapshot()
     assert snap.degraded is True
     assert snap.state == "idle"
     assert snap.count == 0
@@ -270,7 +270,7 @@ def test_pid_zero_bind_does_not_leak_into_another_window():
 
 def test_pid_zero_degraded_bind_enters_degraded_view():
     sources = _sources([_unknown(hwnd=0, project="lost", degraded=True)])
-    snap = _view(sources, hwnd=None, degraded=True).snapshot()
+    snap = _view(sources, hwnd=0).snapshot()
     assert snap.count == 1
     assert snap.label == "lost"
     assert snap.state == "idle"
@@ -282,7 +282,7 @@ def test_pid_zero_binds_are_deduped_by_session_id_not_merged():
         _unknown(session_id="a", updated=NOW, project="new-a"),
         _unknown(session_id="b", hwnd=123, project="b"),
     ])
-    snap = _view(sources, hwnd=123, degraded=False).snapshot()
+    snap = _view(sources, hwnd=123).snapshot()
     assert snap.count == 2
     assert {s.session_id for s in snap.sessions} == {"a", "b"}
     assert snap.label == "new-a"

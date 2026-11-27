@@ -144,11 +144,11 @@ class InMemorySources(Sources):
 class SessionView:
     """把绑定与状态聚合成一盏灯能直接消费的窗口视图"""
 
-    def __init__(self, sources, hwnd=None, degraded=False,
-                 process_checker=None, now=None):
+    def __init__(self, sources, hwnd=0, process_checker=None, now=None):
+        # 降级灯就是「没有窗口的灯」：唯一的判据是 hwnd 是否为空
         self._sources = sources
         self._hwnd = hwnd
-        self._degraded = degraded
+        self._degraded = not hwnd
         if process_checker is None:
             from core.process_identity import is_process_alive
             process_checker = is_process_alive
@@ -162,9 +162,9 @@ class SessionView:
 
         entries = []
         for bind in binds:
-            if bind.degraded != self._degraded:
+            if (bind.hwnd == 0) != self._degraded:
                 continue
-            if not self._degraded and (not self._hwnd or bind.hwnd != self._hwnd):
+            if not self._degraded and bind.hwnd != self._hwnd:
                 continue
 
             known_pid = bind.pid > 0
