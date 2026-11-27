@@ -418,6 +418,39 @@ function Invoke-Tests {
     }
     Assert-True 'no bind file is created outside the dry run' (-not (Test-Path -LiteralPath (Join-Path $state 'probe-x.bind')))
 
+    # ---------------------------------------------------------------- D4 ----
+    Write-Output 'D4  a lone terminal window on the desktop is the last resort'
+    $d = New-Case 'd4'
+    $snap = Join-Path $d 'snap.json'
+    Write-Snapshot -Path $snap -SelfPid 5000 -Windows @(
+        @{ hwnd = 7600; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+    ) -Procs @(
+        @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 0; name = 'explorer.exe'; creationFt = '600'; commandLine = 'explorer.exe'; hwnd = 0 }
+    )
+    $r = Get-DryRun -Snapshot $snap -StateDir (Join-Path $d 'state-one') -SessionId 'lone'
+    if ($r.Json) {
+        Assert-Eq 'the only terminal window is used' $r.Json.hwnd 7600
+        Assert-Eq 'the source says sole' $r.Json.hwnd_source 'sole'
+        Assert-Eq 'a found window is not degraded' $r.Json.degraded 0
+    }
+
+    # a second terminal window makes the desktop ambiguous: never guess
+    $snap2 = Join-Path $d 'snap2.json'
+    Write-Snapshot -Path $snap2 -SelfPid 5000 -Windows @(
+        @{ hwnd = 7600; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+        @{ hwnd = 7700; pid = 9200; 'class' = 'CASCADIA_HOSTING_WINDOW_CLASS' }
+    ) -Procs @(
+        @{ processId = 5000; parentProcessId = 4000; name = 'powershell.exe'; creationFt = '1000'; commandLine = 'powershell.exe'; hwnd = 0 }
+        @{ processId = 4000; parentProcessId = 0; name = 'explorer.exe'; creationFt = '600'; commandLine = 'explorer.exe'; hwnd = 0 }
+    )
+    $r2 = Get-DryRun -Snapshot $snap2 -StateDir (Join-Path $d 'state-two') -SessionId 'lone'
+    if ($r2.Json) {
+        Assert-Eq 'two terminal windows: no window picked' $r2.Json.hwnd 0
+        Assert-Eq 'two terminal windows: source is none' $r2.Json.hwnd_source 'none'
+        Assert-Eq 'two terminal windows: degraded' $r2.Json.degraded 1
+    }
+
     # ---------------------------------------------------------------- SM1 ----
     # The shell is the shipped seam the hook calls: one run, full output contract.
     Write-Output 'SM1  the shell keeps the dry-run JSON contract'

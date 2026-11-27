@@ -271,6 +271,20 @@ function Invoke-Tests {
         Assert-Eq 'bind hwnd_source is none' $b['hwnd_source'] 'none'
     }
 
+    # --------------------------------------------------------------- D5b ----
+    Write-Output 'D5b  a release missing the decision module fails loudly'
+    $d = New-Case 'd5b'
+    $tool = Join-Path $d 'tool'
+    [void](New-Item -ItemType Directory -Path $tool -Force)
+    # only the shell is shipped: a half-copied release must not go quiet
+    Copy-Item -LiteralPath $Resolver -Destination (Join-Path $tool 'resolve.ps1')
+    $snap = Join-Path $d 'snap.json'
+    Write-Snapshot -Path $snap -SelfPid 5000
+    $r = Invoke-ResolveAt -Path (Join-Path $tool 'resolve.ps1') -ArgList @('-Snapshot', $snap, '-StateDir', (Join-Path $d 'state'), '-SessionId', 's9', '-NoSpawn')
+    Assert-Eq 'missing lib exits 2' $r.ExitCode 2
+    Assert-True 'the failure names the missing file' ($r.Text -match 'resolve-lib\.ps1 missing') $r.Text
+    Assert-True 'nothing was written' (-not (Test-Path -LiteralPath (Join-Path $d 'state')))
+
     # ---------------------------------------------------------------- E1 ----
     Write-Output 'E1  GC: fresh-anchored tasks survive, every legacy artefact goes'
     $d = New-Case 'e1'
